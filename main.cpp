@@ -16,6 +16,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 
 struct URL {
@@ -83,9 +84,19 @@ struct URL {
 			assert(false);
 		}
 
-		std::string request = "GET " + this->path + " HTTP/1.0\r\n"
-			"Host: " + this->host + "\r\n"
-			"\r\n";
+		std::string request = "GET " + this->path + " HTTP/1.1\r\n";
+
+		std::vector<std::pair<std::string, std::string>> request_headers;
+		request_headers.push_back(std::make_pair("Host", this->host));
+		request_headers.push_back(std::make_pair("Connection", "close"));
+		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
+		for (auto pair : request_headers) {
+			request.append(pair.first);
+			request.append(": ");
+			request.append(pair.second);
+			request.append("\r\n");
+		}
+		request.append("\r\n");
 
 		std::string response;
 		// todo: unified "connection" object to unify tls and non-tls
@@ -113,7 +124,7 @@ struct URL {
 		std::string http_status = status_line.substr(version_end + 1, http_status_end);
 		std::string explanation = status_line.substr(http_status_end + 1);
 
-		std::unordered_map<std::string, std::string> headers;
+		std::unordered_map<std::string, std::string> response_headers;
 		int max_headers = 250;
 		int i;
 		for (i = 0; i < max_headers; i++) {
@@ -137,12 +148,12 @@ struct URL {
 			value.erase(value.find_last_not_of(whitespace) + 1);
 			value.erase(0, value.find_first_not_of(whitespace));
 
-			headers.insert({header, value});
+			response_headers.insert({header, value});
 		}
 		assert(i != max_headers);
 
-		assert(headers.find("transfer-encoding") == headers.end());
-		assert(headers.find("content-encoding") == headers.end());
+		assert(response_headers.find("transfer-encoding") == response_headers.end());
+		assert(response_headers.find("content-encoding") == response_headers.end());
 
 		return response;
 	}
