@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,7 +30,7 @@ struct URL {
 		auto n = url.find("://");
 		assert(std::string::npos != n);
 		this->scheme = url.substr(0, n);
-		constexpr std::array supported_protocols{"http", "https"};
+		constexpr std::array supported_protocols{"http", "https", "file"};
 		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), this->scheme) != supported_protocols.end();
 		assert(supported);
 		url = url.substr(n + 3);
@@ -51,12 +52,24 @@ struct URL {
 			this->port = 443;
 		} else if (this->scheme == "http") {
 			this->port = 80;
+		} else if (this->scheme == "file") {
+			this->port = 0;
 		} else {
 			assert(false && "unreachable");
+		}
+
+		if (this->scheme == "file") {
+			assert(this->host == "");
+			assert(this->port == 0);
 		}
 	}
 
 	std::string request() const {
+
+		if (this->scheme == "file") {
+			return this->load_file();
+		}
+
 		addrinfo hints{};
 		hints.ai_family = AF_INET;
 		hints.ai_socktype = SOCK_STREAM;
@@ -158,6 +171,19 @@ struct URL {
 		return response;
 	}
 
+	std::string load_file() const {
+		std::ifstream file(this->path);
+		if (!file.is_open()) {
+			std::cerr << "Invalid path" << std::endl;
+			exit(1);
+		}
+
+		// huh, second paramater for what?
+		std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		file.close();
+		return file_content;
+	}
+
 private:
 	std::string request_http(int socket_fd, std::string request) const {
 		int send_result = send(socket_fd, request.c_str(), request.size(), 0);
@@ -251,13 +277,13 @@ void load(URL url) {
 }
 
 int main(int argc, char** argv) {
-	assert(argc == 2);
+	char const *url_string = (argc == 2) ? argv[1] : "file:///home/ababo/dev/browser/index.html";
 
 	SSL_library_init();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 
-	URL url = URL(argv[1]);
+	URL url = URL(url_string);
 	load(url);
 	return 0;
 }
