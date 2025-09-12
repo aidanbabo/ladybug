@@ -1,8 +1,11 @@
-#include <curl/curl.h>
-#include <curl/header.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <cassert>
 #include <cstring>
@@ -12,18 +15,13 @@
 #include <array>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 
-
-size_t callback_func(char *ptr, size_t size, size_t nmemb, void *userdata) {
-	std::string *s = (std::string *) userdata;
-	size_t real_size = size * nmemb;
-	s->append(ptr, real_size);
-	return real_size;
-}
 
 struct URL {
 	std::string scheme;
 	std::string host;
+	uint16_t port;
 	std::string path;
 
 	URL(std::string_view url) {
@@ -43,45 +41,183 @@ struct URL {
 			this->host = url.substr(0, n);
 			this->path = std::string(url.substr(n));
 		}
+
+		n = this->host.find(":");
+		if (std::string::npos != n) {
+			this->port = std::stoi(this->host.substr(n + 1));
+			this->host = this->host.substr(0, n);
+		} else if (this->scheme == "https") {
+			this->port = 443;
+		} else if (this->scheme == "http") {
+			this->port = 80;
+		} else {
+			assert(false && "unreachable");
+		}
 	}
 
 	std::string request() const {
-		CURL *curl = curl_easy_init();
-		char error_buffer[CURL_ERROR_SIZE];
-		error_buffer[0] = '\0';
+		addrinfo hints{};
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		std::string port = std::to_string(this->port);
 
-		CURLcode res;
-		res = curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, error_buffer);
-
-		std::string url = this->scheme + "://" + this->host + this->path;
-		res = curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-		if (res != CURLE_OK) {
-			if (strlen(error_buffer)) {
-				std::cerr << error_buffer << std::endl;
-			} else {
-				std::cerr << curl_easy_strerror(res) << std::endl;
-			}
-			exit(1);
+		addrinfo *res;
+		int status = getaddrinfo(this->host.c_str(), port.c_str(), &hints, &res);
+		if (status != 0) {
+			std::cerr << gai_strerror(status) << std::endl;
+			assert(false);
 		}
 
-		std::string response_data;
-		res = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback_func);
-		assert(!res);
-		res = curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_data);
-		assert(!res);
+		int socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (socket_fd == -1) {
+			perror("socket");
+			freeaddrinfo(res);
+			assert(false);
+		}
 
-		res = curl_easy_perform(curl);
-		assert(!res);
+		int connection_result = connect(socket_fd, res->ai_addr, res->ai_addrlen);
+		freeaddrinfo(res);
+		if (connection_result == -1) {
+			perror("connect");
+			close(socket_fd);
+			assert(false);
+		}
 
-		CURLHcode resh;
-		struct curl_header *hout;
-		resh = curl_easy_header(curl, "transfer-encoding", 0, CURLH_HEADER, -1, &hout);
-		assert(resh == CURLHE_MISSING);
-		resh = curl_easy_header(curl, "content-encoding", 0, CURLH_HEADER, -1, &hout);
-		assert(resh == CURLHE_MISSING);
+		std::string request = "GET " + this->path + " HTTP/1.0\r\n"
+			"Host: " + this->host + "\r\n"
+			"\r\n";
 
-		curl_easy_cleanup(curl);
-		return response_data;
+		std::string response;
+		// todo: unified "connection" object to unify tls and non-tls
+		// ala Python
+		if (this->scheme == "http") {
+			response = this->request_http(socket_fd, request);
+		} else if (this->scheme == "https") {
+			response = this->request_https(socket_fd, request);
+		} else {
+			assert(false);
+		}
+		close(socket_fd);
+
+		int status_line_end = response.find("\r\n");
+		assert(status_line_end != std::string::npos);
+		std::string status_line = response.substr(0, status_line_end);
+		response = response.substr(status_line_end + 2);
+
+		int version_end = status_line.find(" ");
+		assert(version_end != std::string::npos);
+		int http_status_end = status_line.find(" ", version_end + 1);
+		assert(http_status_end != std::string::npos);
+
+		std::string version = status_line.substr(0, version_end);
+		std::string http_status = status_line.substr(version_end + 1, http_status_end);
+		std::string explanation = status_line.substr(http_status_end + 1);
+
+		std::unordered_map<std::string, std::string> headers;
+		int max_headers = 250;
+		int i;
+		for (i = 0; i < max_headers; i++) {
+			int line_end = response.find("\r\n");
+			assert(line_end != std::string::npos);
+			std::string line = response.substr(0, line_end);
+			response = response.substr(line_end + 2);
+
+			if (line == "") {
+				break;
+			}
+
+			int colon = line.find(":");
+			assert(colon != std::string::npos);
+
+			std::string header = line.substr(0, colon);
+			std::transform(header.begin(), header.end(), header.begin(), ::tolower);
+
+			std::string value = line.substr(colon + 1);
+			char const *whitespace = " \t\n\r\f\v";
+			value.erase(value.find_last_not_of(whitespace) + 1);
+			value.erase(0, value.find_first_not_of(whitespace));
+
+			headers.insert({header, value});
+		}
+		assert(i != max_headers);
+
+		assert(headers.find("transfer-encoding") == headers.end());
+		assert(headers.find("content-encoding") == headers.end());
+
+		return response;
+	}
+
+private:
+	std::string request_http(int socket_fd, std::string request) const {
+		int send_result = send(socket_fd, request.c_str(), request.size(), 0);
+		assert(send_result != -1);
+
+		std::string response;
+		char buffer[1024];
+		ssize_t bytes_received;
+		// todo: remove infinite
+		for (;;) {
+			bytes_received = recv(socket_fd, buffer, sizeof(buffer) - 1, 0);
+			assert(bytes_received != -1);
+			if (bytes_received == 0) {
+				break;
+			}
+
+			response.append(buffer, bytes_received);
+		}
+
+		return response;
+	}
+
+	std::string request_https(int socket_fd, std::string request) const {
+
+		const SSL_METHOD *method = TLS_client_method();
+		SSL_CTX *ctx = SSL_CTX_new(method);
+		if (!ctx) {
+			ERR_print_errors_fp(stderr);
+			close(socket_fd);
+			assert(false);
+		}
+
+		SSL *ssl = SSL_new(ctx);
+		SSL_set_fd(ssl, socket_fd);
+
+		if (SSL_connect(ssl) <= 0) {
+			ERR_print_errors_fp(stderr);
+			SSL_free(ssl);
+			SSL_CTX_free(ctx);
+			close(socket_fd);
+			assert(false);
+		}
+
+		int send_result = SSL_write(ssl, request.c_str(), request.size());
+		if (send_result <= 0) {
+			ERR_print_errors_fp(stderr);
+			SSL_free(ssl);
+			SSL_CTX_free(ctx);
+			close(socket_fd);
+			assert(false);
+		}
+
+		std::string response;
+		char buffer[1024];
+		ssize_t bytes_received;
+		// todo: remove infinite
+		for (;;) {
+			bytes_received = SSL_read(ssl, buffer, sizeof(buffer) - 1);
+			assert(bytes_received != -1);
+			if (bytes_received == 0) {
+				break;
+			}
+
+			response.append(buffer, bytes_received);
+		}
+
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+		SSL_CTX_free(ctx);
+
+		return response;
 	}
 };
 
@@ -105,6 +241,11 @@ void load(URL url) {
 
 int main(int argc, char** argv) {
 	assert(argc == 2);
+
+	SSL_library_init();
+	SSL_load_error_strings();
+	OpenSSL_add_all_algorithms();
+
 	URL url = URL(argv[1]);
 	load(url);
 	return 0;
