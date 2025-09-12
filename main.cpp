@@ -27,25 +27,39 @@ struct URL {
 	std::string path;
 
 	URL(std::string_view url) {
-		auto n = url.find("://");
-		assert(std::string::npos != n);
+		auto n = url.find(":");
+		assert(n != std::string::npos);
 		this->scheme = url.substr(0, n);
-		constexpr std::array supported_protocols{"http", "https", "file"};
+		constexpr std::array supported_protocols{"http", "https", "file", "data"};
 		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), this->scheme) != supported_protocols.end();
 		assert(supported);
-		url = url.substr(n + 3);
+		if (this->scheme == "data") {
+			url = url.substr(n + 1);
+		} else {
+			assert(url.substr(n + 1, 2) == "//");
+			url = url.substr(n + 3);
+		}
+
+		if (this->scheme == "data") {
+			n = url.find(",");
+			assert(n != std::string::npos);
+			assert(url.substr(0, n) == "text/html");
+			// not really what this is for storing...
+			this->path = url.substr(n + 1);
+			return;
+		}
 
 		n = url.find("/");
-		if (std::string::npos == n) {
+		if (n == std::string::npos) {
 			this->host = url;
 			this->path = "/";
 		} else {
 			this->host = url.substr(0, n);
-			this->path = std::string(url.substr(n));
+			this->path = url.substr(n);
 		}
 
 		n = this->host.find(":");
-		if (std::string::npos != n) {
+		if (n != std::string::npos) {
 			this->port = std::stoi(this->host.substr(n + 1));
 			this->host = this->host.substr(0, n);
 		} else if (this->scheme == "https") {
@@ -68,6 +82,10 @@ struct URL {
 
 		if (this->scheme == "file") {
 			return this->load_file();
+		}
+
+		if (this->scheme == "data") {
+			return this->path;
 		}
 
 		addrinfo hints{};
@@ -171,6 +189,7 @@ struct URL {
 		return response;
 	}
 
+private:
 	std::string load_file() const {
 		std::ifstream file(this->path);
 		if (!file.is_open()) {
@@ -184,7 +203,6 @@ struct URL {
 		return file_content;
 	}
 
-private:
 	std::string request_http(int socket_fd, std::string request) const {
 		int send_result = send(socket_fd, request.c_str(), request.size(), 0);
 		assert(send_result != -1);
