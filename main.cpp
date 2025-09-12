@@ -19,8 +19,24 @@
 #include <unordered_map>
 #include <vector>
 
+std::string escape(std::string source) {
+	std::string output;
+	for (char c : source) {
+		if (c == '&') {
+			output.append("&amp;");
+		} else if (c == '<') {
+			output.append("&lt;");
+		} else if (c == '>') {
+			output.append("&gt;");
+		} else {
+			output.push_back(c);
+		}
+	}
+	return output;
+}
 
 struct URL {
+	bool view_source = false;
 	std::string scheme;
 	std::string host;
 	uint16_t port;
@@ -30,6 +46,16 @@ struct URL {
 		auto n = url.find(":");
 		assert(n != std::string::npos);
 		this->scheme = url.substr(0, n);
+
+		if (this->scheme == "view-source") {
+			this->view_source = true;
+			url = url.substr(n + 1);
+
+			n = url.find(":");
+			assert(n != std::string::npos);
+			this->scheme = url.substr(0, n);
+		}
+
 		constexpr std::array supported_protocols{"http", "https", "file", "data"};
 		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), this->scheme) != supported_protocols.end();
 		assert(supported);
@@ -80,14 +106,39 @@ struct URL {
 
 	std::string request() const {
 
+		std::string response;
 		if (this->scheme == "file") {
-			return this->load_file();
+			response = this->load_file();
+		} else if (this->scheme == "data") {
+			response = this->path;
+		} else if (this->scheme == "http" || this->scheme == "https") {
+			response = this->request_http_generic();
+		} else {
+			assert(false);
 		}
 
-		if (this->scheme == "data") {
-			return this->path;
+		if (this->view_source) {
+			return escape(response);
+		} else {
+			return response;
+		}
+	}
+
+private:
+	std::string load_file() const {
+		std::ifstream file(this->path);
+		if (!file.is_open()) {
+			std::cerr << "Invalid path" << std::endl;
+			exit(1);
 		}
 
+		// huh, second paramater for what?
+		std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+		file.close();
+		return file_content;
+	}
+
+	std::string request_http_generic() const {
 		addrinfo hints{};
 		hints.ai_family = AF_INET;
 		hints.ai_socktype = SOCK_STREAM;
@@ -189,20 +240,6 @@ struct URL {
 		return response;
 	}
 
-private:
-	std::string load_file() const {
-		std::ifstream file(this->path);
-		if (!file.is_open()) {
-			std::cerr << "Invalid path" << std::endl;
-			exit(1);
-		}
-
-		// huh, second paramater for what?
-		std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		file.close();
-		return file_content;
-	}
-
 	std::string request_http(int socket_fd, std::string request) const {
 		int send_result = send(socket_fd, request.c_str(), request.size(), 0);
 		assert(send_result != -1);
@@ -287,18 +324,25 @@ void show(std::string_view body) {
 			in_tag = false;
 		} else if (!in_tag) {
 			if (c == '&') {
-				assert(i + 1 < body.length());
+				assert(i + 2 < body.length());
 				char c2 = body[i];
 				char c3 = body[i + 1];
-				if (c2 == 'l' && c3 == 't') {
+				char c4 = body[i + 2];
+				if (c2 == 'l' && c3 == 't' && c4 == ';') {
 					std::cout << '<';
-					i += 2;
-				} else if (c2 == 'g' && c3 == 't') {
+					i += 3;
+				} else if (c2 == 'g' && c3 == 't' && c4 == ';') {
 					std::cout << '>';
-					i += 2;
+					i += 3;
 				} else {
-					// is this right?
-					std::cout << '&';
+					assert(i + 3 < body.length());
+					char c5 = body[i + 3];
+					if (c2 == 'a' && c3 == 'm' && c4 == 'p' && c5 == ';') {
+						std::cout << '&';
+						i += 4;
+					} else {
+						assert(false);
+					}
 				}
 			} else { 
 				std::cout << c;
