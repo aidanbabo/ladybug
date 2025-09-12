@@ -277,14 +277,32 @@ private:
 };
 
 void show(std::string_view body) {
+	int i = 0;
 	bool in_tag = false;
-	for (char c : body) {
+	while (i < body.length()) {
+		char c = body[i++];
 		if (c == '<') {
 			in_tag = true;
 		} else if (c == '>') {
 			in_tag = false;
 		} else if (!in_tag) {
-			std::cout << c;
+			if (c == '&') {
+				assert(i + 1 < body.length());
+				char c2 = body[i];
+				char c3 = body[i + 1];
+				if (c2 == 'l' && c3 == 't') {
+					std::cout << '<';
+					i += 2;
+				} else if (c2 == 'g' && c3 == 't') {
+					std::cout << '>';
+					i += 2;
+				} else {
+					// is this right?
+					std::cout << '&';
+				}
+			} else { 
+				std::cout << c;
+			}
 		}
 	}
 }
