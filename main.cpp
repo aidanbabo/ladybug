@@ -35,6 +35,87 @@ std::string escape(std::string source) {
 	return output;
 }
 
+struct URL {
+	bool view_source = false;
+	std::string scheme;
+	std::string host;
+	uint16_t port;
+	std::string path;
+
+	URL(std::string_view url) {
+		auto n = url.find(":");
+		assert(n != std::string::npos);
+		scheme = url.substr(0, n);
+
+		if (scheme == "view-source") {
+			view_source = true;
+			url = url.substr(n + 1);
+
+			n = url.find(":");
+			assert(n != std::string::npos);
+			scheme = url.substr(0, n);
+		}
+
+		constexpr std::array supported_protocols{"http", "https", "file", "data"};
+		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), scheme) != supported_protocols.end();
+		assert(supported);
+		if (scheme == "data") {
+			url = url.substr(n + 1);
+		} else {
+			assert(url.substr(n + 1, 2) == "//");
+			url = url.substr(n + 3);
+		}
+
+		if (scheme == "data") {
+			n = url.find(",");
+			assert(n != std::string::npos);
+			assert(url.substr(0, n) == "text/html");
+			// not really what this is for storing...
+			path = url.substr(n + 1);
+			return;
+		}
+
+		n = url.find("/");
+		if (n == std::string::npos) {
+			host = url;
+			path = "/";
+		} else {
+			host = url.substr(0, n);
+			path = url.substr(n);
+		}
+
+		n = host.find(":");
+		if (n != std::string::npos) {
+			port = std::stoi(host.substr(n + 1));
+			host = host.substr(0, n);
+		} else if (scheme == "https") {
+			port = 443;
+		} else if (scheme == "http") {
+			port = 80;
+		} else if (scheme == "file") {
+			port = 0;
+		} else {
+			assert(false && "unreachable");
+		}
+
+		if (scheme == "file") {
+			assert(host == "");
+			assert(port == 0);
+		}
+	}
+
+	URL(std::string scheme, std::string host, uint16_t port) 
+		: scheme(scheme)
+		, host(host)
+		, port(port)
+		, path("/")
+	{}
+
+	std::string base() const {
+		return scheme + "://" + host + ":" + std::to_string(port);
+	}
+};
+
 class HttpConnection {
 	int m_socket_fd;
 	SSL_CTX *m_ctx = nullptr;
@@ -50,7 +131,6 @@ public:
 		addrinfo *res;
 		int status = getaddrinfo(host, port_s.c_str(), &hints, &res);
 		if (status != 0) {
-			std::cerr << gai_strerror(status) << std::endl;
 			assert(false);
 		}
 
@@ -131,37 +211,52 @@ public:
 	}
 
 	std::string request(std::string request) {
-		if (is_encrypted()) {
-			return request_with_tls(request);
-		} else {
-			return request_without_tls(request);
-		}
-	}
 
-private:
-	std::string request_with_tls(std::string request) const {
-
-		// there may be handleable failures here for larger request sizes?
-		int send_result = SSL_write(m_ssl, request.c_str(), request.size());
-		if (send_result <= 0) {
-			ERR_print_errors_fp(stderr);
-			SSL_shutdown(m_ssl);
-			SSL_free(m_ssl);
-			SSL_CTX_free(m_ctx);
-			close(m_socket_fd);
-			assert(false);
-		}
+		write(request);
 
 		std::string response;
 		char buffer[1024];
 		int bytes_received;
 		// todo: remove infinite
 		for (;;) {
-			bytes_received = SSL_read(m_ssl, buffer, sizeof(buffer) - 1);
+			bytes_received = read(buffer, sizeof(buffer) - 1);
+			response.append(buffer, bytes_received);
+			if (bytes_received == 0) {
+				break;
+			}
+		}
+		return response;
+	}
+
+private:
+	void write(std::string data) {
+		if (is_encrypted()) {
+			// there may be handleable failures here for larger request sizes?
+			int send_result = SSL_write(m_ssl, data.c_str(), data.size());
+			if (send_result <= 0) {
+				ERR_print_errors_fp(stderr);
+				SSL_shutdown(m_ssl);
+				SSL_free(m_ssl);
+				SSL_CTX_free(m_ctx);
+				close(m_socket_fd);
+				assert(false);
+			}
+		} else {
+			int send_result = send(m_socket_fd, data.c_str(), data.size(), 0);
+			if (send_result == -1) {
+				perror("send");
+				assert(false);
+			}
+		}
+	}
+
+	int read(char *buffer, int length) const {
+		if (is_encrypted()) {
+			int bytes_received = SSL_read(m_ssl, buffer, sizeof(buffer) - 1);
 			if (bytes_received <= 0) {
 				switch (SSL_get_error(m_ssl, bytes_received)) {
 				case SSL_ERROR_ZERO_RETURN:
-					goto after_read;
+					return 0;
 				default:
 					// i can't use goto for error handling this is tragic?
 					// do i have to... use deconstructors?
@@ -174,122 +269,33 @@ private:
 					break;
 				}
 			}
-			if (bytes_received == 0) {
-				break;
-			}
-
-			response.append(buffer, bytes_received);
-		}
-
-after_read:
-		return response;
-	}
-
-	std::string request_without_tls(std::string request) const {
-		int send_result = send(m_socket_fd, request.c_str(), request.size(), 0);
-		assert(send_result != -1);
-
-		std::string response;
-		char buffer[1024];
-		ssize_t bytes_received;
-		// todo: remove infinite
-		for (;;) {
-			bytes_received = recv(m_socket_fd, buffer, sizeof(buffer) - 1, 0);
+			return bytes_received;
+		} else {
+			int bytes_received = recv(m_socket_fd, buffer, sizeof(buffer) - 1, 0);
 			assert(bytes_received != -1);
-			if (bytes_received == 0) {
-				break;
-			}
-
-			response.append(buffer, bytes_received);
+			return bytes_received;
 		}
-		return response;
 	}
 };
 
-class URL {
-	bool m_view_source = false;
-	std::string m_scheme;
-	std::string m_host;
-	uint16_t m_port;
-	std::string m_path;
+class ConnectionManager {
+	// default ctor and dtor? handle this (and the HttpConnections) correctly?
+	std::unordered_map<std::string, HttpConnection *> m_active_connections;
 
 public:
-	URL(std::string_view url) {
-		auto n = url.find(":");
-		assert(n != std::string::npos);
-		m_scheme = url.substr(0, n);
-
-		if (m_scheme == "view-source") {
-			m_view_source = true;
-			url = url.substr(n + 1);
-
-			n = url.find(":");
-			assert(n != std::string::npos);
-			m_scheme = url.substr(0, n);
-		}
-
-		constexpr std::array supported_protocols{"http", "https", "file", "data"};
-		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), m_scheme) != supported_protocols.end();
-		assert(supported);
-		if (m_scheme == "data") {
-			url = url.substr(n + 1);
-		} else {
-			assert(url.substr(n + 1, 2) == "//");
-			url = url.substr(n + 3);
-		}
-
-		if (m_scheme == "data") {
-			n = url.find(",");
-			assert(n != std::string::npos);
-			assert(url.substr(0, n) == "text/html");
-			// not really what this is for storing...
-			m_path = url.substr(n + 1);
-			return;
-		}
-
-		n = url.find("/");
-		if (n == std::string::npos) {
-			m_host = url;
-			m_path = "/";
-		} else {
-			m_host = url.substr(0, n);
-			m_path = url.substr(n);
-		}
-
-		n = m_host.find(":");
-		if (n != std::string::npos) {
-			m_port = std::stoi(m_host.substr(n + 1));
-			m_host = m_host.substr(0, n);
-		} else if (m_scheme == "https") {
-			m_port = 443;
-		} else if (m_scheme == "http") {
-			m_port = 80;
-		} else if (m_scheme == "file") {
-			m_port = 0;
-		} else {
-			assert(false && "unreachable");
-		}
-
-		if (m_scheme == "file") {
-			assert(m_host == "");
-			assert(m_port == 0);
-		}
-	}
-
-	std::string request() const {
-
+	std::string request(URL url) {
 		std::string response;
-		if (m_scheme == "file") {
-			response = load_file();
-		} else if (m_scheme == "data") {
-			response = m_path;
-		} else if (m_scheme == "http" || m_scheme == "https") {
-			response = request_http();
+		if (url.scheme == "file") {
+			response = load_file(url);
+		} else if (url.scheme == "data") {
+			response = url.path;
+		} else if (url.scheme == "http" || url.scheme == "https") {
+			response = request_http(url);
 		} else {
 			assert(false);
 		}
 
-		if (m_view_source) {
+		if (url.view_source) {
 			return escape(response);
 		} else {
 			return response;
@@ -297,8 +303,8 @@ public:
 	}
 
 private:
-	std::string load_file() const {
-		std::ifstream file(m_path);
+	std::string load_file(URL url) const {
+		std::ifstream file(url.path);
 		if (!file.is_open()) {
 			std::cerr << "Invalid path" << std::endl;
 			exit(1);
@@ -310,23 +316,34 @@ private:
 		return file_content;
 	}
 
-	std::string request_http() const {
+	std::string request_http(URL url) {
+		std::string base = url.base();
+		auto pair = m_active_connections.find(base);
 
-		bool encrypted;
-		if (m_scheme == "http") {
-			encrypted = false;
-		} else if (m_scheme == "https") {
-			encrypted = true;
-		} else {
-			assert(false);
-		}
-		HttpConnection connection = HttpConnection(m_host.c_str(), m_port, encrypted);
+		// I wish if statements were expressions so bad
+		HttpConnection *connection = [&] {
+			if (pair == m_active_connections.end()) {
+				bool encrypted;
+				if (url.scheme == "http") {
+					encrypted = false;
+				} else if (url.scheme == "https") {
+					encrypted = true;
+				} else {
+					assert(false);
+				}
+				HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
+				m_active_connections.insert({base, connection});
+				return m_active_connections[base];
+			} else {
+				return pair->second;
+			}
+		}();
 
-		std::string request = "GET " + m_path + " HTTP/1.1\r\n";
+		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
 		std::vector<std::pair<std::string, std::string>> request_headers;
-		request_headers.push_back(std::make_pair("Host", m_host));
-		request_headers.push_back(std::make_pair("Connection", "close"));
+		request_headers.push_back(std::make_pair("Host", url.host));
+		request_headers.push_back(std::make_pair("Connection", "close")); // todo: keep-alive
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		for (auto pair : request_headers) {
 			request.append(pair.first);
@@ -336,7 +353,7 @@ private:
 		}
 		request.append("\r\n");
 
-		std::string response = connection.request(request);
+		std::string response = connection->request(request);
 
 		int status_line_end = response.find("\r\n");
 		assert(status_line_end != std::string::npos);
@@ -430,8 +447,8 @@ void show(std::string_view body) {
 	}
 }
 
-void load(URL url) {
-	std::string body = url.request();
+void load(ConnectionManager cm, URL url) {
+	std::string body = cm.request(url);
 	show(body);
 }
 
@@ -442,7 +459,8 @@ int main(int argc, char** argv) {
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 
+	auto connection_manager = ConnectionManager();
 	URL url = URL(url_string);
-	load(url);
+	load(connection_manager, url);
 	return 0;
 }
