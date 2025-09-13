@@ -272,9 +272,13 @@ private:
 		}
 
 		SSL *ssl = SSL_new(ctx);
-		SSL_set_fd(ssl, socket_fd);
-
-		if (SSL_connect(ssl) <= 0) {
+		if (!ssl) {
+			ERR_print_errors_fp(stderr);
+			SSL_CTX_free(ctx);
+			close(socket_fd);
+			assert(false);
+		}
+		if (SSL_set_fd(ssl, socket_fd) == 0) {
 			ERR_print_errors_fp(stderr);
 			SSL_free(ssl);
 			SSL_CTX_free(ctx);
@@ -282,9 +286,27 @@ private:
 			assert(false);
 		}
 
+		int connection_status = SSL_connect(ssl);
+		if (connection_status == 0) {
+			// gracefully failed
+			ERR_print_errors_fp(stderr);
+			SSL_free(ssl);
+			SSL_CTX_free(ctx);
+			close(socket_fd);
+			assert(false);
+		} else if (connection_status < 0) {
+			ERR_print_errors_fp(stderr);
+			SSL_free(ssl);
+			SSL_CTX_free(ctx);
+			close(socket_fd);
+			assert(false);
+		}
+
+		// there may be handleable failures here for larger request sizes?
 		int send_result = SSL_write(ssl, request.c_str(), request.size());
 		if (send_result <= 0) {
 			ERR_print_errors_fp(stderr);
+			SSL_shutdown(ssl);
 			SSL_free(ssl);
 			SSL_CTX_free(ctx);
 			close(socket_fd);
@@ -293,11 +315,26 @@ private:
 
 		std::string response;
 		char buffer[1024];
-		ssize_t bytes_received;
+		int bytes_received;
 		// todo: remove infinite
 		for (;;) {
 			bytes_received = SSL_read(ssl, buffer, sizeof(buffer) - 1);
-			assert(bytes_received != -1);
+			if (bytes_received <= 0) {
+				switch (SSL_get_error(ssl, bytes_received)) {
+				case SSL_ERROR_ZERO_RETURN:
+					goto after_read;
+				default:
+					// i can't use goto for error handling this is tragic?
+					// do i have to... use deconstructors?
+					ERR_print_errors_fp(stderr);
+					SSL_shutdown(ssl);
+					SSL_free(ssl);
+					SSL_CTX_free(ctx);
+					close(socket_fd);
+					assert(false);
+					break;
+				}
+			}
 			if (bytes_received == 0) {
 				break;
 			}
@@ -305,7 +342,13 @@ private:
 			response.append(buffer, bytes_received);
 		}
 
-		SSL_shutdown(ssl);
+after_read:
+		auto ret = SSL_shutdown(ssl);
+		if (ret < 0) {
+			SSL_get_error(ssl, ret);
+		} else if (ret == 0) {
+			// no error, shutdown in progress
+		}
 		SSL_free(ssl);
 		SSL_CTX_free(ctx);
 
