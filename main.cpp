@@ -215,7 +215,7 @@ public:
 
 		std::vector<std::pair<std::string, std::string>> request_headers;
 		request_headers.push_back(std::make_pair("Host", url.host));
-		request_headers.push_back(std::make_pair("Connection", "close")); // todo: keep-alive
+		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		for (auto pair : request_headers) {
 			request.append(pair.first);
@@ -237,8 +237,15 @@ public:
 
 		ParsingState parsing_state = PARSING_STATUS_LINE;
 
-		// todo: remove infinite
 		for (;;) {
+			if (parsing_state == PARSING_BODY) {
+				auto content_length_entry = response_headers.find("content-length");
+				if (content_length_entry != response_headers.end() && response.length() == std::stoi(content_length_entry->second)) {
+					break;
+				}
+			}
+
+
 			char buffer[1024];
 			int bytes_received = read(buffer, sizeof(buffer) - 1);
 			response.append(buffer, bytes_received);
@@ -367,6 +374,12 @@ public:
 		}
 	}
 
+	void print_active_connections() const {
+		for (auto p : m_active_connections) {
+			std::cerr << p.first << ": " << p.second << std::endl;
+		}
+	}
+
 private:
 	std::string load_file(URL url) const {
 		std::ifstream file(url.path);
@@ -388,6 +401,7 @@ private:
 		// I wish if statements were expressions so bad
 		HttpConnection *connection = [&] {
 			if (pair == m_active_connections.end()) {
+				std::cerr << "Creating new connection for " << base << std::endl;
 				bool encrypted;
 				if (url.scheme == "http") {
 					encrypted = false;
@@ -398,12 +412,13 @@ private:
 				}
 				HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
 				m_active_connections.insert({base, connection});
-				return m_active_connections[base];
+				HttpConnection *conn = m_active_connections[base];
+				return conn;
 			} else {
+				std::cerr << "Reusing connection for " << base << std::endl;
 				return pair->second;
 			}
 		}();
-
 
 		std::string response = connection->request(url);
 		return response;
@@ -453,20 +468,25 @@ void show(std::string_view body) {
 	}
 }
 
-void load(ConnectionManager cm, URL url) {
+void load(ConnectionManager& cm, URL url) {
 	std::string body = cm.request(url);
 	show(body);
 }
 
 int main(int argc, char** argv) {
-	char const *url_string = (argc == 2) ? argv[1] : "file:///home/ababo/dev/browser/index.html";
-
 	SSL_library_init();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 
 	auto connection_manager = ConnectionManager();
-	URL url = URL(url_string);
-	load(connection_manager, url);
+	if (argc == 1) {
+		URL url = URL("file:///home/ababo/dev/browser/index.html");
+		load(connection_manager, url);
+	} else {
+		for (int i = 1; i < argc; i++) {
+			URL url = URL(argv[i]);
+			load(connection_manager, url);
+		}
+	}
 	return 0;
 }
