@@ -210,21 +210,86 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	std::string request(std::string request) {
+	std::string request(URL url) {
+		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
+		std::vector<std::pair<std::string, std::string>> request_headers;
+		request_headers.push_back(std::make_pair("Host", url.host));
+		request_headers.push_back(std::make_pair("Connection", "close")); // todo: keep-alive
+		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
+		for (auto pair : request_headers) {
+			request.append(pair.first);
+			request.append(": ");
+			request.append(pair.second);
+			request.append("\r\n");
+		}
+		request.append("\r\n");
 		write(request);
 
+		std::unordered_map<std::string, std::string> response_headers;
 		std::string response;
-		char buffer[1024];
-		int bytes_received;
+
+		enum ParsingState {
+			PARSING_STATUS_LINE,
+			PARSING_HEADERS,
+			PARSING_BODY,
+		};
+
+		ParsingState parsing_state = PARSING_STATUS_LINE;
+
 		// todo: remove infinite
 		for (;;) {
-			bytes_received = read(buffer, sizeof(buffer) - 1);
+			char buffer[1024];
+			int bytes_received = read(buffer, sizeof(buffer) - 1);
 			response.append(buffer, bytes_received);
 			if (bytes_received == 0) {
 				break;
 			}
+			if (parsing_state == PARSING_BODY) {
+				continue;
+			}
+
+			int line_end = response.find("\r\n");
+			if (line_end == std::string::npos) {
+				continue;
+			}
+
+			std::string line = response.substr(0, line_end);
+			response = response.substr(line_end + 2);
+			if (parsing_state == PARSING_STATUS_LINE) {
+				int version_end = line.find(" ");
+				assert(version_end != std::string::npos);
+				int http_status_end = line.find(" ", version_end + 1);
+				assert(http_status_end != std::string::npos);
+
+				std::string version = line.substr(0, version_end);
+				std::string http_status = line.substr(version_end + 1, http_status_end);
+				std::string explanation = line.substr(http_status_end + 1);
+				parsing_state = PARSING_HEADERS;
+			} else if (parsing_state == PARSING_HEADERS) {
+				if (line == "") {
+					assert(response_headers.find("transfer-encoding") == response_headers.end());
+					assert(response_headers.find("content-encoding") == response_headers.end());
+					parsing_state = PARSING_BODY;
+				} else {
+					int colon = line.find(":");
+					assert(colon != std::string::npos);
+
+					std::string header = line.substr(0, colon);
+					std::transform(header.begin(), header.end(), header.begin(), ::tolower);
+
+					std::string value = line.substr(colon + 1);
+					char const *whitespace = " \t\n\r\f\v";
+					value.erase(value.find_last_not_of(whitespace) + 1);
+					value.erase(0, value.find_first_not_of(whitespace));
+
+					response_headers.insert({header, value});
+				}
+			} else {
+				assert(false);
+			}
 		}
+
 		return response;
 	}
 
@@ -339,67 +404,8 @@ private:
 			}
 		}();
 
-		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
-		std::vector<std::pair<std::string, std::string>> request_headers;
-		request_headers.push_back(std::make_pair("Host", url.host));
-		request_headers.push_back(std::make_pair("Connection", "close")); // todo: keep-alive
-		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
-		for (auto pair : request_headers) {
-			request.append(pair.first);
-			request.append(": ");
-			request.append(pair.second);
-			request.append("\r\n");
-		}
-		request.append("\r\n");
-
-		std::string response = connection->request(request);
-
-		int status_line_end = response.find("\r\n");
-		assert(status_line_end != std::string::npos);
-		std::string status_line = response.substr(0, status_line_end);
-		response = response.substr(status_line_end + 2);
-
-		int version_end = status_line.find(" ");
-		assert(version_end != std::string::npos);
-		int http_status_end = status_line.find(" ", version_end + 1);
-		assert(http_status_end != std::string::npos);
-
-		std::string version = status_line.substr(0, version_end);
-		std::string http_status = status_line.substr(version_end + 1, http_status_end);
-		std::string explanation = status_line.substr(http_status_end + 1);
-
-		std::unordered_map<std::string, std::string> response_headers;
-		int max_headers = 250;
-		int i;
-		for (i = 0; i < max_headers; i++) {
-			int line_end = response.find("\r\n");
-			assert(line_end != std::string::npos);
-			std::string line = response.substr(0, line_end);
-			response = response.substr(line_end + 2);
-
-			if (line == "") {
-				break;
-			}
-
-			int colon = line.find(":");
-			assert(colon != std::string::npos);
-
-			std::string header = line.substr(0, colon);
-			std::transform(header.begin(), header.end(), header.begin(), ::tolower);
-
-			std::string value = line.substr(colon + 1);
-			char const *whitespace = " \t\n\r\f\v";
-			value.erase(value.find_last_not_of(whitespace) + 1);
-			value.erase(0, value.find_first_not_of(whitespace));
-
-			response_headers.insert({header, value});
-		}
-		assert(i != max_headers);
-
-		assert(response_headers.find("transfer-encoding") == response_headers.end());
-		assert(response_headers.find("content-encoding") == response_headers.end());
-
+		std::string response = connection->request(url);
 		return response;
 	}
 };
