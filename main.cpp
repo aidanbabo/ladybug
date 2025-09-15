@@ -116,6 +116,14 @@ struct URL {
 	}
 };
 
+struct HttpResponse {
+	int status;
+	std::string version;
+	std::string explanation;
+	std::unordered_map<std::string, std::string> headers;
+	std::string body;
+};
+
 class HttpConnection {
 	int m_socket_fd;
 	SSL_CTX *m_ctx = nullptr;
@@ -210,7 +218,7 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	std::string request(URL url) {
+	HttpResponse request(URL url) {
 		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
 		std::vector<std::pair<std::string, std::string>> request_headers;
@@ -226,8 +234,8 @@ public:
 		request.append("\r\n");
 		write(request);
 
-		std::unordered_map<std::string, std::string> response_headers;
-		std::string response;
+		std::string received;
+		HttpResponse response;
 
 		enum ParsingState {
 			PARSING_STATUS_LINE,
@@ -239,8 +247,8 @@ public:
 
 		for (;;) {
 			if (parsing_state == PARSING_BODY) {
-				auto content_length_entry = response_headers.find("content-length");
-				if (content_length_entry != response_headers.end() && response.length() == std::stoi(content_length_entry->second)) {
+				auto content_length_entry = response.headers.find("content-length");
+				if (content_length_entry != response.headers.end() && received.length() == std::stoi(content_length_entry->second)) {
 					break;
 				}
 			}
@@ -248,7 +256,7 @@ public:
 
 			char buffer[1024];
 			int bytes_received = read(buffer, sizeof(buffer) - 1);
-			response.append(buffer, bytes_received);
+			received.append(buffer, bytes_received);
 			if (bytes_received == 0) {
 				break;
 			}
@@ -256,27 +264,27 @@ public:
 				continue;
 			}
 
-			int line_end = response.find("\r\n");
+			int line_end = received.find("\r\n");
 			if (line_end == std::string::npos) {
 				continue;
 			}
 
-			std::string line = response.substr(0, line_end);
-			response = response.substr(line_end + 2);
+			std::string line = received.substr(0, line_end);
+			received = received.substr(line_end + 2);
 			if (parsing_state == PARSING_STATUS_LINE) {
 				int version_end = line.find(" ");
 				assert(version_end != std::string::npos);
 				int http_status_end = line.find(" ", version_end + 1);
 				assert(http_status_end != std::string::npos);
 
-				std::string version = line.substr(0, version_end);
-				std::string http_status = line.substr(version_end + 1, http_status_end);
-				std::string explanation = line.substr(http_status_end + 1);
+				response.version = line.substr(0, version_end);
+				response.status = std::stoi(line.substr(version_end + 1, http_status_end));
+				response.explanation = line.substr(http_status_end + 1);
 				parsing_state = PARSING_HEADERS;
 			} else if (parsing_state == PARSING_HEADERS) {
 				if (line == "") {
-					assert(response_headers.find("transfer-encoding") == response_headers.end());
-					assert(response_headers.find("content-encoding") == response_headers.end());
+					assert(response.headers.find("transfer-encoding") == response.headers.end());
+					assert(response.headers.find("content-encoding")  == response.headers.end());
 					parsing_state = PARSING_BODY;
 				} else {
 					int colon = line.find(":");
@@ -290,13 +298,14 @@ public:
 					value.erase(value.find_last_not_of(whitespace) + 1);
 					value.erase(0, value.find_first_not_of(whitespace));
 
-					response_headers.insert({header, value});
+					response.headers.insert({header, value});
 				}
 			} else {
 				assert(false);
 			}
 		}
 
+		response.body = received;
 		return response;
 	}
 
@@ -395,33 +404,47 @@ private:
 	}
 
 	std::string request_http(URL url) {
-		std::string base = url.base();
-		auto pair = m_active_connections.find(base);
+		// redirect loop
+		for (int i = 0; i < 10; i++) {
+			std::string base = url.base();
+			auto pair = m_active_connections.find(base);
 
-		// I wish if statements were expressions so bad
-		HttpConnection *connection = [&] {
-			if (pair == m_active_connections.end()) {
-				std::cerr << "Creating new connection for " << base << std::endl;
-				bool encrypted;
-				if (url.scheme == "http") {
-					encrypted = false;
-				} else if (url.scheme == "https") {
-					encrypted = true;
+			// I wish if statements were expressions so bad
+			HttpConnection *connection = [&] {
+				if (pair == m_active_connections.end()) {
+					std::cerr << "Creating new connection for " << base << std::endl;
+					bool encrypted;
+					if (url.scheme == "http") {
+						encrypted = false;
+					} else if (url.scheme == "https") {
+						encrypted = true;
+					} else {
+						assert(false);
+					}
+					HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
+					m_active_connections.insert({base, connection});
+					HttpConnection *conn = m_active_connections[base];
+					return conn;
 				} else {
-					assert(false);
+					std::cerr << "Reusing connection for " << base << std::endl;
+					return pair->second;
 				}
-				HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
-				m_active_connections.insert({base, connection});
-				HttpConnection *conn = m_active_connections[base];
-				return conn;
-			} else {
-				std::cerr << "Reusing connection for " << base << std::endl;
-				return pair->second;
-			}
-		}();
+			}();
 
-		std::string response = connection->request(url);
-		return response;
+			HttpResponse response = connection->request(url);
+			if (response.status >= 300 && response.status < 400) {
+				std::string location = response.headers["location"];
+				if (location.rfind("/", 0) == 0) { // starts_with
+					url.path = location;
+				} else {
+					url = URL(location);
+				}
+				continue;
+			}
+			return response.body;
+		}
+
+		assert(false && "Too many redirects");
 	}
 };
 
@@ -432,21 +455,20 @@ int unescape_sequence(std::string_view body, int i) {
 	char c4 = body[i + 2];
 	if (c2 == 'l' && c3 == 't' && c4 == ';') {
 		std::cout << '<';
-		i += 3;
+		return i + 3;
 	} else if (c2 == 'g' && c3 == 't' && c4 == ';') {
 		std::cout << '>';
-		i += 3;
+		return i + 3;
 	} else {
 		assert(i + 3 < body.length());
 		char c5 = body[i + 3];
 		if (c2 == 'a' && c3 == 'm' && c4 == 'p' && c5 == ';') {
 			std::cout << '&';
-			i += 4;
-		} else {
-			assert(false);
+			return i + 4;
 		}
 	}
-	return i;
+	std::cout << '&';
+	return i + 1;
 }
 
 void show(std::string_view body) {
