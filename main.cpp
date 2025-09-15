@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 
 #include <algorithm>
 #include <array>
@@ -33,6 +34,28 @@ std::string escape(std::string source) {
 		}
 	}
 	return output;
+}
+
+std::string trim_whitespace(std::string s) {
+	char const *whitespace = " \t\n\r\f\v";
+	s.erase(s.find_last_not_of(whitespace) + 1);
+	s.erase(0, s.find_first_not_of(whitespace));
+	return s;
+}
+
+std::vector<std::string> split(std::string s, std::string const& delimiter) {
+	std::vector<std::string> items;
+	size_t start = 0;
+	for (;;) {
+		size_t end_pos = s.find(delimiter, start);
+		if (end_pos == std::string::npos) {
+			items.push_back(s.substr(start));
+			return items;
+		}
+
+		items.push_back(s.substr(start, end_pos));
+		start += end_pos + delimiter.length();
+	}
 }
 
 struct URL {
@@ -114,6 +137,14 @@ struct URL {
 	std::string base() const {
 		return scheme + "://" + host + ":" + std::to_string(port);
 	}
+
+	std::string cachable_subsection() const {
+		return scheme + "://" + host + ":" + std::to_string(port) + path;
+	}
+
+	std::string to_string() const {
+		return scheme + "://" + host + ":" + std::to_string(port) + path;
+	}
 };
 
 struct HttpResponse {
@@ -174,6 +205,14 @@ public:
 				assert(false);
 			}
 			if (SSL_set_fd(m_ssl, m_socket_fd) == 0) {
+				ERR_print_errors_fp(stderr);
+				SSL_free(m_ssl);
+				SSL_CTX_free(m_ctx);
+				close(m_socket_fd);
+				assert(false);
+			}
+
+			if (SSL_set_tlsext_host_name(m_ssl, host) == 0) {
 				ERR_print_errors_fp(stderr);
 				SSL_free(m_ssl);
 				SSL_CTX_free(m_ctx);
@@ -294,10 +333,7 @@ public:
 					std::transform(header.begin(), header.end(), header.begin(), ::tolower);
 
 					std::string value = line.substr(colon + 1);
-					char const *whitespace = " \t\n\r\f\v";
-					value.erase(value.find_last_not_of(whitespace) + 1);
-					value.erase(0, value.find_first_not_of(whitespace));
-
+					value = trim_whitespace(value);
 					response.headers.insert({header, value});
 				}
 			} else {
@@ -359,9 +395,16 @@ private:
 	}
 };
 
+struct CachedHttpResponse {
+	HttpResponse response;
+	std::time_t expires_at;
+};
+
 class ConnectionManager {
 	// default ctor and dtor? handle this (and the HttpConnections) correctly?
 	std::unordered_map<std::string, HttpConnection *> m_active_connections;
+	// GAHHHH MAKING THINGS Hash SUCKS
+	std::unordered_map<std::string, CachedHttpResponse> m_cached_responses;
 
 public:
 	std::string request(URL url) {
@@ -371,7 +414,7 @@ public:
 		} else if (url.scheme == "data") {
 			response = url.path;
 		} else if (url.scheme == "http" || url.scheme == "https") {
-			response = request_http(url);
+			response = load_from_cache_or_fetch(url);
 		} else {
 			assert(false);
 		}
@@ -401,6 +444,65 @@ private:
 		std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 		file.close();
 		return file_content;
+	}
+
+	std::string load_from_cache_or_fetch(URL url) {
+		std::string cachable_url = url.cachable_subsection();
+		if (auto cached = m_cached_responses.find(cachable_url); cached != m_cached_responses.end()) {
+			std::time_t now = std::time(nullptr);
+			if (now >= cached->second.expires_at) {
+				m_cached_responses.erase(cached);
+			} else {
+				std::cerr << "Using cached response for " << cachable_url << std::endl;
+				return cached->second.response.body;
+			}
+		}
+		return request_http(url);
+	}
+
+	void store_in_cache_if_cachable(URL url, HttpResponse response) {
+		// todo: add 301, 404, etc.
+		if (response.status != 200) {
+			return;
+		}
+
+		auto ctrl_header = response.headers.find("cache-control");
+		if (ctrl_header == response.headers.end()) {
+			return;
+		}
+
+		std::vector<std::string> directives = split(ctrl_header->second, ",");
+		for (std::string d : directives) {
+			std::string directive = trim_whitespace(d);
+
+			if (directive == "no-store") {
+				std::cerr << "No store for " << url.to_string() << std::endl;
+				return;
+			}
+
+			std::string_view header_start = "max-age=";
+			if (directive.rfind(header_start, 0) != 0) { // does not starts_with
+				// todo: handle other values
+				return;
+			}
+
+			// this function throws on failure :(
+			uint64_t max_age = std::stol(directive.substr(header_start.length()));
+
+			uint64_t age = 0;
+			if (auto age_finder = response.headers.find("age"); age_finder != response.headers.end()) {
+				age = std::stol(age_finder->second);
+			}
+
+			std::time_t expires_at = std::time(nullptr) + max_age - age;
+
+			std::string cachable_url = url.cachable_subsection();
+			CachedHttpResponse cachable_response = {
+				.response = response,
+				.expires_at = expires_at,
+			};
+			m_cached_responses.insert({cachable_url, cachable_response});
+		}
 	}
 
 	std::string request_http(URL url) {
@@ -439,8 +541,12 @@ private:
 				} else {
 					url = URL(location);
 				}
+				std::cerr << "Redirected to " << url.to_string() << std::endl;
 				continue;
 			}
+
+			store_in_cache_if_cachable(url, response);
+
 			return response.body;
 		}
 
