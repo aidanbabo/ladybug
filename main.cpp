@@ -1,5 +1,6 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <zlib.h>
 
 #include <netdb.h>
 #include <netinet/in.h>
@@ -273,8 +274,84 @@ public:
 		request.append("\r\n");
 		write(request);
 
-		std::string received;
-		HttpResponse response;
+		int const buffer_size = 4096;
+		char input_buffer[buffer_size];
+		HttpResponse response = parse_up_to_body(input_buffer, buffer_size);
+
+		int bytes_received = response.body.length();
+		assert(bytes_received <= buffer_size);
+		// make sure we have the data in the start of the buffer
+		memcpy(input_buffer, response.body.data(), bytes_received);
+		// wasteful for non-gzip
+		response.body.clear();
+
+		int content_length = -1;
+		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
+			content_length = std::stol(content_length_entry->second);
+		}
+		assert(content_length != -1);
+
+		bool gzip_decompress = false;
+		z_stream zstream;
+
+		if (auto content_encoding = response.headers.find("content-encoding"); content_encoding != response.headers.end()) {
+			if (content_encoding->second == "gzip") {
+				gzip_decompress = true;
+				zstream.zalloc = Z_NULL;
+				zstream.zfree = Z_NULL;
+				zstream.opaque = Z_NULL;
+				zstream.avail_in = 0;
+				zstream.next_in = Z_NULL;
+				int ret = inflateInit(&zstream);
+				assert(ret == Z_OK);
+			}
+		}
+
+		for (;;) {
+			if (gzip_decompress) {
+				char output_buffer[buffer_size];
+				zstream.avail_in = bytes_received;
+				zstream.next_in = (unsigned char *)input_buffer;
+				do {
+					zstream.avail_out = buffer_size;
+					zstream.next_out = (unsigned char *)output_buffer;
+					int ret = inflate(&zstream, Z_NO_FLUSH);
+					assert(ret != Z_STREAM_ERROR);
+					switch (ret) {
+					case Z_NEED_DICT:
+						ret = Z_DATA_ERROR;
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+						inflateEnd(&zstream);
+						// return ret; // from docs
+						assert(false);
+					}
+
+					int have = buffer_size - zstream.avail_out;
+					response.body.append(output_buffer, have);
+				} while (zstream.avail_out == 0);
+			} else {
+				response.body.append(input_buffer, bytes_received);
+			}
+
+			if (response.body.length() == content_length) {
+				break;
+			}
+
+			int to_read = (buffer_size > content_length - response.body.length()) ? content_length - response.body.length() : buffer_size;
+			bytes_received = read(input_buffer, buffer_size);
+
+			if (bytes_received == 0) {
+				break;
+			}
+		}
+
+		return response;
+	}
+
+	// because of how we receive data, this function will load data after the headers into the
+	// response body
+	HttpResponse parse_up_to_body(char *input_buffer, int input_buffer_size) {
 
 		enum ParsingState {
 			PARSING_STATUS_LINE,
@@ -282,65 +359,58 @@ public:
 			PARSING_BODY,
 		};
 
+		std::string received;
 		ParsingState parsing_state = PARSING_STATUS_LINE;
+		HttpResponse response;
 
-		for (;;) {
-			if (parsing_state == PARSING_BODY) {
-				auto content_length_entry = response.headers.find("content-length");
-				if (content_length_entry != response.headers.end() && received.length() == std::stoi(content_length_entry->second)) {
-					break;
-				}
-			}
-
-
-			char buffer[1024];
-			int bytes_received = read(buffer, sizeof(buffer) - 1);
-			received.append(buffer, bytes_received);
+		do {
+			int bytes_received = read(input_buffer, input_buffer_size);
 			if (bytes_received == 0) {
 				break;
 			}
-			if (parsing_state == PARSING_BODY) {
-				continue;
-			}
+			received.append(input_buffer, bytes_received);
 
-			int line_end = received.find("\r\n");
-			if (line_end == std::string::npos) {
-				continue;
-			}
+			for (;;) {
 
-			std::string line = received.substr(0, line_end);
-			received = received.substr(line_end + 2);
-			if (parsing_state == PARSING_STATUS_LINE) {
-				int version_end = line.find(" ");
-				assert(version_end != std::string::npos);
-				int http_status_end = line.find(" ", version_end + 1);
-				assert(http_status_end != std::string::npos);
-
-				response.version = line.substr(0, version_end);
-				response.status = std::stoi(line.substr(version_end + 1, http_status_end));
-				response.explanation = line.substr(http_status_end + 1);
-				parsing_state = PARSING_HEADERS;
-			} else if (parsing_state == PARSING_HEADERS) {
-				if (line == "") {
-					assert(response.headers.find("transfer-encoding") == response.headers.end());
-					assert(response.headers.find("content-encoding")  == response.headers.end());
-					parsing_state = PARSING_BODY;
-				} else {
-					int colon = line.find(":");
-					assert(colon != std::string::npos);
-
-					std::string header = line.substr(0, colon);
-					std::transform(header.begin(), header.end(), header.begin(), ::tolower);
-
-					std::string value = line.substr(colon + 1);
-					value = trim_whitespace(value);
-					response.headers.insert({header, value});
+				int line_end = received.find("\r\n");
+				if (line_end == std::string::npos) {
+					break;
 				}
-			} else {
-				assert(false);
-			}
-		}
 
+				std::string line = received.substr(0, line_end);
+				received = received.substr(line_end + 2);
+				if (parsing_state == PARSING_STATUS_LINE) {
+					int version_end = line.find(" ");
+					assert(version_end != std::string::npos);
+					int http_status_end = line.find(" ", version_end + 1);
+					assert(http_status_end != std::string::npos);
+
+					response.version = line.substr(0, version_end);
+					response.status = std::stoi(line.substr(version_end + 1, http_status_end));
+					response.explanation = line.substr(http_status_end + 1);
+					parsing_state = PARSING_HEADERS;
+				} else if (parsing_state == PARSING_HEADERS) {
+					if (line == "") {
+						parsing_state = PARSING_BODY;
+						break;
+					} else {
+						int colon = line.find(":");
+						assert(colon != std::string::npos);
+
+						std::string header = line.substr(0, colon);
+						std::transform(header.begin(), header.end(), header.begin(), ::tolower);
+
+						std::string value = line.substr(colon + 1);
+						value = trim_whitespace(value);
+						response.headers.insert({header, value});
+					}
+				} else {
+					assert(false);
+				}
+			}
+		} while (parsing_state != PARSING_BODY);
+
+		assert(response.headers.find("transfer-encoding") == response.headers.end());
 		response.body = received;
 		return response;
 	}
@@ -349,7 +419,7 @@ private:
 	void write(std::string data) {
 		if (is_encrypted()) {
 			// there may be handleable failures here for larger request sizes?
-			int send_result = SSL_write(m_ssl, data.c_str(), data.size());
+			int send_result = SSL_write(m_ssl, data.data(), data.size());
 			if (send_result <= 0) {
 				ERR_print_errors_fp(stderr);
 				SSL_shutdown(m_ssl);
@@ -359,7 +429,7 @@ private:
 				assert(false);
 			}
 		} else {
-			int send_result = send(m_socket_fd, data.c_str(), data.size(), 0);
+			int send_result = send(m_socket_fd, data.data(), data.size(), 0);
 			if (send_result == -1) {
 				perror("send");
 				assert(false);
@@ -369,7 +439,7 @@ private:
 
 	int read(char *buffer, int length) const {
 		if (is_encrypted()) {
-			int bytes_received = SSL_read(m_ssl, buffer, sizeof(buffer) - 1);
+			int bytes_received = SSL_read(m_ssl, buffer, length);
 			if (bytes_received <= 0) {
 				switch (SSL_get_error(m_ssl, bytes_received)) {
 				case SSL_ERROR_ZERO_RETURN:
@@ -388,7 +458,7 @@ private:
 			}
 			return bytes_received;
 		} else {
-			int bytes_received = recv(m_socket_fd, buffer, sizeof(buffer) - 1, 0);
+			int bytes_received = recv(m_socket_fd, buffer, length, 0);
 			assert(bytes_received != -1);
 			return bytes_received;
 		}
