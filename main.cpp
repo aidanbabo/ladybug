@@ -44,18 +44,20 @@ std::string trim_whitespace(std::string s) {
 	return s;
 }
 
-std::vector<std::string> split(std::string s, std::string const& delimiter) {
+std::vector<std::string> split(std::string s, std::string const& delimiter, int nsplits = -1) {
 	std::vector<std::string> items;
 	size_t start = 0;
 	for (;;) {
 		size_t end_pos = s.find(delimiter, start);
-		if (end_pos == std::string::npos) {
-			items.push_back(s.substr(start));
+		if (end_pos == std::string::npos || items.size() == nsplits) {
+			std::string item = s.substr(start);
+			items.push_back(item);
 			return items;
 		}
 
-		items.push_back(s.substr(start, end_pos));
-		start += end_pos + delimiter.length();
+		std::string item = s.substr(start, end_pos - start);
+		items.push_back(item);
+		start = end_pos + delimiter.length();
 	}
 }
 
@@ -265,7 +267,7 @@ public:
 		request_headers.push_back(std::make_pair("Host", url.host));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
-		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip"));
+		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip, deflate"));
 		for (auto pair : request_headers) {
 			request.append(pair.first);
 			request.append(": ");
@@ -277,23 +279,17 @@ public:
 
 		int const buffer_size = 4096;
 		char input_buffer[buffer_size];
-		HttpResponse response = parse_up_to_body(input_buffer, buffer_size);
-
-		int bytes_received = response.body.length();
-		assert(bytes_received <= buffer_size);
-		// make sure we have the data in the start of the buffer
-		memcpy(input_buffer, response.body.data(), bytes_received);
-		// wasteful for non-gzip
-		response.body.clear();
-
-		parse_body(input_buffer, buffer_size, bytes_received, response);
+		char *next_in;
+		int avail_in;
+		HttpResponse response = parse_up_to_body(input_buffer, buffer_size, next_in, avail_in);
+		parse_body(input_buffer, buffer_size, next_in, avail_in, response);
 
 		return response;
 	}
 
 	// because of how we receive data, this function will load data after the headers into the
 	// response body
-	HttpResponse parse_up_to_body(char *input_buffer, int input_buffer_size) {
+	HttpResponse parse_up_to_body(char *input_buffer, int input_buffer_size, char *& next_in, int& avail_in) {
 
 		enum ParsingState {
 			PARSING_STATUS_LINE,
@@ -305,8 +301,9 @@ public:
 		ParsingState parsing_state = PARSING_STATUS_LINE;
 		HttpResponse response;
 
+		int bytes_received;
 		do {
-			int bytes_received = read(input_buffer, input_buffer_size);
+			bytes_received = read(input_buffer, input_buffer_size);
 			if (bytes_received == 0) {
 				break;
 			}
@@ -322,29 +319,28 @@ public:
 				std::string line = received.substr(0, line_end);
 				received = received.substr(line_end + 2);
 				if (parsing_state == PARSING_STATUS_LINE) {
-					int version_end = line.find(" ");
-					assert(version_end != std::string::npos);
-					int http_status_end = line.find(" ", version_end + 1);
-					assert(http_status_end != std::string::npos);
+					auto status = split(line, " ");
+					assert(status.size() == 3);
 
-					response.version = line.substr(0, version_end);
-					response.status = std::stoi(line.substr(version_end + 1, http_status_end));
-					response.explanation = line.substr(http_status_end + 1);
+					response.version = status[0];
+					response.status = std::stoi(status[1]);
+					response.explanation = status[2];
+
 					parsing_state = PARSING_HEADERS;
 				} else if (parsing_state == PARSING_HEADERS) {
 					if (line == "") {
 						parsing_state = PARSING_BODY;
 						break;
 					} else {
-						int colon = line.find(":");
-						assert(colon != std::string::npos);
+						auto header_split = split(line, ":", 1);
+						assert(header_split.size() == 2);
 
-						std::string header = line.substr(0, colon);
-						std::transform(header.begin(), header.end(), header.begin(), ::tolower);
+						std::string header_name = header_split[0];
+						std::string header_value = header_split[1];
+						std::transform(header_name.begin(), header_name.end(), header_name.begin(), ::tolower);
 
-						std::string value = line.substr(colon + 1);
-						value = trim_whitespace(value);
-						response.headers.insert({header, value});
+						header_value = trim_whitespace(header_value);
+						response.headers.insert({header_name, header_value});
 					}
 				} else {
 					assert(false);
@@ -352,43 +348,69 @@ public:
 			}
 		} while (parsing_state != PARSING_BODY);
 
-		assert(response.headers.find("transfer-encoding") == response.headers.end());
-		response.body = received;
+		int data_offset = bytes_received - received.length();
+		next_in = input_buffer + data_offset;
+		avail_in = received.length();
+
 		return response;
 	}
 
-	void parse_body(char *input_buffer, int input_buffer_size, int bytes_received, HttpResponse& response) {
+	void parse_body(char *input_buffer, int input_buffer_size, char *next_in, int avail_in, HttpResponse& response) {
 		int total_content_length = -1;
 		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
 			total_content_length = std::stol(content_length_entry->second);
 		}
-		assert(total_content_length != -1);
 		int current_content_length = 0;
 
-		bool gzip_decompress = false;
+		bool decompress = false;
 		z_stream zstream;
 
 		if (auto content_encoding = response.headers.find("content-encoding"); content_encoding != response.headers.end()) {
 			if (content_encoding->second == "gzip") {
-				std::cerr << "Uncompressing body" << std::endl;
-				gzip_decompress = true;
-				zstream.zalloc = Z_NULL;
-				zstream.zfree = Z_NULL;
-				zstream.opaque = Z_NULL;
-				zstream.avail_in = 0;
-				zstream.next_in = Z_NULL;
-				int ret = inflateInit2(&zstream, 15 + 16);
-				assert(ret == Z_OK);
+				decompress = true;
+			} else if (content_encoding->second == "deflate") {
+				decompress = true;
 			}
+		}
+
+		bool chunked_transfer = false;
+		if (auto transfer_encoding = response.headers.find("transfer-encoding"); transfer_encoding != response.headers.end()) {
+			auto s = split(transfer_encoding->second, ",");
+			for (auto v : s) {
+				std::string value = trim_whitespace(v);
+				if (value == "gzip") {
+					decompress = true;
+				} else if (value == "deflate") {
+					decompress = true;
+				} else if (value == "") {
+					chunked_transfer = -1;
+				} else {
+					assert(false);
+				}
+			}
+		}
+
+		assert(total_content_length != -1 || chunked_transfer);
+
+		if (decompress) {
+			std::cerr << "Uncompressing body" << std::endl;
+			zstream.zalloc = Z_NULL;
+			zstream.zfree = Z_NULL;
+			zstream.opaque = Z_NULL;
+			zstream.avail_in = 0;
+			zstream.next_in = Z_NULL;
+			// allow gzip and zlib wrappers
+			int ret = inflateInit2(&zstream, 15 + 32);
+			assert(ret == Z_OK);
 		}
 
 		// we break in the middle of this loop because of the data we start with
 		for (;;) {
-			if (gzip_decompress) {
+			if (decompress) {
 				int const output_buffer_size = 4096;
 				char output_buffer[output_buffer_size];
-				zstream.avail_in = bytes_received;
-				zstream.next_in = (unsigned char *)input_buffer;
+				zstream.avail_in = avail_in;
+				zstream.next_in = (unsigned char *)next_in;
 				do {
 					zstream.avail_out = output_buffer_size;
 					zstream.next_out = (unsigned char *)output_buffer;
@@ -408,18 +430,19 @@ public:
 					response.body.append(output_buffer, have);
 				} while (zstream.avail_out == 0);
 			} else {
-				response.body.append(input_buffer, bytes_received);
-				std::string created(input_buffer, bytes_received);
+				response.body.append(next_in, avail_in);
 			}
 
-			current_content_length += bytes_received;
+			current_content_length += avail_in;
 			if (current_content_length == total_content_length) {
 				break;
 			}
 
-			bytes_received = read(input_buffer, input_buffer_size);
+			avail_in = read(input_buffer, input_buffer_size);
+			next_in = input_buffer;
 
-			if (bytes_received == 0) {
+
+			if (avail_in == 0) {
 				break;
 			}
 		}
