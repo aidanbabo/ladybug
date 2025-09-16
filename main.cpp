@@ -265,6 +265,7 @@ public:
 		request_headers.push_back(std::make_pair("Host", url.host));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
+		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip"));
 		for (auto pair : request_headers) {
 			request.append(pair.first);
 			request.append(": ");
@@ -285,66 +286,7 @@ public:
 		// wasteful for non-gzip
 		response.body.clear();
 
-		int content_length = -1;
-		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
-			content_length = std::stol(content_length_entry->second);
-		}
-		assert(content_length != -1);
-
-		bool gzip_decompress = false;
-		z_stream zstream;
-
-		if (auto content_encoding = response.headers.find("content-encoding"); content_encoding != response.headers.end()) {
-			if (content_encoding->second == "gzip") {
-				gzip_decompress = true;
-				zstream.zalloc = Z_NULL;
-				zstream.zfree = Z_NULL;
-				zstream.opaque = Z_NULL;
-				zstream.avail_in = 0;
-				zstream.next_in = Z_NULL;
-				int ret = inflateInit(&zstream);
-				assert(ret == Z_OK);
-			}
-		}
-
-		for (;;) {
-			if (gzip_decompress) {
-				char output_buffer[buffer_size];
-				zstream.avail_in = bytes_received;
-				zstream.next_in = (unsigned char *)input_buffer;
-				do {
-					zstream.avail_out = buffer_size;
-					zstream.next_out = (unsigned char *)output_buffer;
-					int ret = inflate(&zstream, Z_NO_FLUSH);
-					assert(ret != Z_STREAM_ERROR);
-					switch (ret) {
-					case Z_NEED_DICT:
-						ret = Z_DATA_ERROR;
-					case Z_DATA_ERROR:
-					case Z_MEM_ERROR:
-						inflateEnd(&zstream);
-						// return ret; // from docs
-						assert(false);
-					}
-
-					int have = buffer_size - zstream.avail_out;
-					response.body.append(output_buffer, have);
-				} while (zstream.avail_out == 0);
-			} else {
-				response.body.append(input_buffer, bytes_received);
-			}
-
-			if (response.body.length() == content_length) {
-				break;
-			}
-
-			int to_read = (buffer_size > content_length - response.body.length()) ? content_length - response.body.length() : buffer_size;
-			bytes_received = read(input_buffer, buffer_size);
-
-			if (bytes_received == 0) {
-				break;
-			}
-		}
+		parse_body(input_buffer, buffer_size, bytes_received, response);
 
 		return response;
 	}
@@ -413,6 +355,74 @@ public:
 		assert(response.headers.find("transfer-encoding") == response.headers.end());
 		response.body = received;
 		return response;
+	}
+
+	void parse_body(char *input_buffer, int input_buffer_size, int bytes_received, HttpResponse& response) {
+		int total_content_length = -1;
+		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
+			total_content_length = std::stol(content_length_entry->second);
+		}
+		assert(total_content_length != -1);
+		int current_content_length = 0;
+
+		bool gzip_decompress = false;
+		z_stream zstream;
+
+		if (auto content_encoding = response.headers.find("content-encoding"); content_encoding != response.headers.end()) {
+			if (content_encoding->second == "gzip") {
+				std::cerr << "Uncompressing body" << std::endl;
+				gzip_decompress = true;
+				zstream.zalloc = Z_NULL;
+				zstream.zfree = Z_NULL;
+				zstream.opaque = Z_NULL;
+				zstream.avail_in = 0;
+				zstream.next_in = Z_NULL;
+				int ret = inflateInit2(&zstream, 15 + 16);
+				assert(ret == Z_OK);
+			}
+		}
+
+		// we break in the middle of this loop because of the data we start with
+		for (;;) {
+			if (gzip_decompress) {
+				int const output_buffer_size = 4096;
+				char output_buffer[output_buffer_size];
+				zstream.avail_in = bytes_received;
+				zstream.next_in = (unsigned char *)input_buffer;
+				do {
+					zstream.avail_out = output_buffer_size;
+					zstream.next_out = (unsigned char *)output_buffer;
+					int ret = inflate(&zstream, Z_NO_FLUSH);
+					assert(ret != Z_STREAM_ERROR);
+					switch (ret) {
+					case Z_NEED_DICT:
+						ret = Z_DATA_ERROR;
+					case Z_DATA_ERROR:
+					case Z_MEM_ERROR:
+						inflateEnd(&zstream);
+						// return ret; // from docs
+						assert(false);
+					}
+
+					int have = output_buffer_size - zstream.avail_out;
+					response.body.append(output_buffer, have);
+				} while (zstream.avail_out == 0);
+			} else {
+				response.body.append(input_buffer, bytes_received);
+				std::string created(input_buffer, bytes_received);
+			}
+
+			current_content_length += bytes_received;
+			if (current_content_length == total_content_length) {
+				break;
+			}
+
+			bytes_received = read(input_buffer, input_buffer_size);
+
+			if (bytes_received == 0) {
+				break;
+			}
+		}
 	}
 
 private:
