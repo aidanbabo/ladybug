@@ -287,8 +287,6 @@ public:
 		return response;
 	}
 
-	// because of how we receive data, this function will load data after the headers into the
-	// response body
 	HttpResponse parse_up_to_body(char *input_buffer, int input_buffer_size, char *& next_in, int& avail_in) {
 
 		enum ParsingState {
@@ -319,7 +317,7 @@ public:
 				std::string line = received.substr(0, line_end);
 				received = received.substr(line_end + 2);
 				if (parsing_state == PARSING_STATUS_LINE) {
-					auto status = split(line, " ");
+					auto status = split(line, " ", 2);
 					assert(status.size() == 3);
 
 					response.version = status[0];
@@ -360,7 +358,6 @@ public:
 		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
 			total_content_length = std::stol(content_length_entry->second);
 		}
-		int current_content_length = 0;
 
 		bool decompress = false;
 		z_stream zstream;
@@ -382,8 +379,8 @@ public:
 					decompress = true;
 				} else if (value == "deflate") {
 					decompress = true;
-				} else if (value == "") {
-					chunked_transfer = -1;
+				} else if (value == "chunked") {
+					chunked_transfer = true;
 				} else {
 					assert(false);
 				}
@@ -404,51 +401,129 @@ public:
 			assert(ret == Z_OK);
 		}
 
-		// we break in the middle of this loop because of the data we start with
-		for (;;) {
-			if (decompress) {
-				int const output_buffer_size = 4096;
-				char output_buffer[output_buffer_size];
-				zstream.avail_in = avail_in;
-				zstream.next_in = (unsigned char *)next_in;
+		int current_content_length = 0;
+		int size_of_current_chunk = -1;
+
+		if (chunked_transfer) {
+			// per chunk
+			do {
+				size_of_current_chunk = 0;
+				current_content_length = 0;
+				// odd loop, in practice only runs twice, nullptr then not
+				for (;;) {
+					char *newline = (char *)memmem(next_in, avail_in, "\r\n", 2);
+					if (newline == nullptr) {
+						int length = avail_in;
+						assert(next_in[avail_in - 1] != '\r' && "Not handling split \\r\\n!");
+						std::string s(next_in, length);
+						if (s != "") {
+							int adding = std::stoi(s, 0, 16);
+							size_of_current_chunk = (size_of_current_chunk << length) + adding;
+						}
+
+						avail_in = read(input_buffer, input_buffer_size);
+						next_in = input_buffer;
+					} else {
+						int length = newline - next_in;
+						std::string s(next_in, length);
+						if (s != "") {
+							int adding = std::stoi(s, 0, 16);
+							size_of_current_chunk = (size_of_current_chunk << length) + adding;
+						}
+
+						next_in += length + 2;
+						avail_in -= length + 2;
+						break;
+					}
+				}
+
+				// we break in the middle of this loop because of the data we start with
 				do {
-					zstream.avail_out = output_buffer_size;
-					zstream.next_out = (unsigned char *)output_buffer;
-					int ret = inflate(&zstream, Z_NO_FLUSH);
-					assert(ret != Z_STREAM_ERROR);
-					switch (ret) {
-					case Z_NEED_DICT:
-						ret = Z_DATA_ERROR;
-					case Z_DATA_ERROR:
-					case Z_MEM_ERROR:
-						inflateEnd(&zstream);
-						// return ret; // from docs
-						assert(false);
+					int amount_to_read = std::min(size_of_current_chunk - current_content_length, avail_in);
+
+					decode_exact(next_in, amount_to_read, decompress, &zstream, response);
+
+					if (amount_to_read == avail_in) {
+						avail_in = read(input_buffer, input_buffer_size);
+						next_in = input_buffer;
+					} else {
+						next_in += amount_to_read;
+						avail_in -= amount_to_read;
 					}
 
-					int have = output_buffer_size - zstream.avail_out;
-					response.body.append(output_buffer, have);
-				} while (zstream.avail_out == 0);
-			} else {
-				response.body.append(next_in, avail_in);
-			}
+					current_content_length += amount_to_read;
+				} while (current_content_length != size_of_current_chunk);
 
-			current_content_length += avail_in;
-			if (current_content_length == total_content_length) {
-				break;
-			}
+				if (avail_in >= 2) {
+					assert(next_in[0] == '\r');
+					assert(next_in[1] == '\n');
+					next_in += 2;
+					avail_in -= 2;
+				} else {
+					assert(false && "Not handling split \\r\\n!");
+				}
 
-			avail_in = read(input_buffer, input_buffer_size);
-			next_in = input_buffer;
+			} while (size_of_current_chunk != 0);
+		} else {
+			// we break in the middle of this loop because of the data we start with
+			for (;;) {
 
+				int amount_to_read = std::min(total_content_length - current_content_length, avail_in);
 
-			if (avail_in == 0) {
-				break;
+				decode_exact(next_in, amount_to_read, decompress, &zstream, response);
+
+				current_content_length += amount_to_read;
+				if (current_content_length == total_content_length) {
+					break;
+				}
+
+				if (amount_to_read == avail_in) {
+					avail_in = read(input_buffer, input_buffer_size);
+					next_in = input_buffer;
+
+					if (avail_in == 0) {
+						break;
+					}
+				} else {
+					next_in += amount_to_read;
+					avail_in -= amount_to_read;
+				}
 			}
 		}
 	}
 
 private:
+	void decode_exact(char *next_in, int avail_in, bool decompress, z_stream *zstream, HttpResponse& response) {
+		if (decompress) {
+			int const output_buffer_size = 4096;
+			char output_buffer[output_buffer_size];
+			zstream->avail_in = avail_in;
+			zstream->next_in = (unsigned char *)next_in;
+			do {
+				zstream->avail_out = output_buffer_size;
+				zstream->next_out = (unsigned char *)output_buffer;
+				int ret = inflate(zstream, Z_NO_FLUSH);
+				assert(ret != Z_STREAM_ERROR);
+				switch (ret) {
+				case Z_NEED_DICT:
+					ret = Z_DATA_ERROR;
+				case Z_DATA_ERROR:
+				case Z_MEM_ERROR:
+					inflateEnd(zstream);
+					// return ret; // from docs
+					assert(false);
+				}
+
+				int have = output_buffer_size - zstream->avail_out;
+				response.body.append(output_buffer, have);
+			} while (zstream->avail_out == 0);
+		} else {
+			response.body.append(next_in, avail_in);
+		}
+
+	}
+
+
 	void write(std::string data) {
 		if (is_encrypted()) {
 			// there may be handleable failures here for larger request sizes?
