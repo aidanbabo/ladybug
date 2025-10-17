@@ -811,10 +811,7 @@ std::vector<CharacterPosition> layout(std::string text) {
 	int cursor_y = VSTEP;
 	std::vector<CharacterPosition> display_list;
 	// todo: use skia native tools?
-	// todo: unicode
-	// todo: newlines
 	for (char c : text) {
-
 		if (c == '\n') {
 			cursor_y += VSTEP + VSTEP / 2;
 			cursor_x = HSTEP;
@@ -892,7 +889,8 @@ public:
 		canvas->clear(SK_ColorWHITE);
 
 		for (auto cpos : m_display_list) {
-			if (cpos.y > m_scroll + HEIGHT) continue;
+			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
+			if (cpos.y > m_scroll + HEIGHT + VSTEP) continue;
 			if (cpos.y + VSTEP < m_scroll) continue;
 			std::string s(1, cpos.c);
 			canvas->drawString(s.c_str(), cpos.x, cpos.y - m_scroll, font, paint);
@@ -914,6 +912,14 @@ public:
 		SDL_RenderClear(m_renderer);
 		SDL_RenderTexture(m_renderer, m_texture, nullptr, nullptr);
 		SDL_RenderPresent(m_renderer);
+	}
+
+	void scroll_up() {
+		m_scroll -= SCROLL_STEP;
+		if (m_scroll < 0) {
+			m_scroll = 0;
+		}
+		draw();
 	}
 
 	void scroll_down() {
@@ -981,10 +987,17 @@ int main(int argc, char** argv) {
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_EVENT_QUIT) {
 				done = true;
-			}
-
-			if (event.type == SDL_EVENT_KEY_DOWN) {
+			} else if (event.type == SDL_EVENT_KEY_DOWN) {
 				if (event.key.key == SDLK_DOWN) {
+					browser.scroll_down();
+				} else if (event.key.key == SDLK_UP) {
+					browser.scroll_up();
+				}
+			} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+				// todo: smooth scrolling
+				if (event.wheel.y > 0) {
+					browser.scroll_up();
+				} else if (event.wheel.y < 0) {
 					browser.scroll_down();
 				}
 			}
