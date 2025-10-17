@@ -1,3 +1,18 @@
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+
+// Skia
+#include "include/core/SkCanvas.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkSurface.h"
+
+#include "include/core/SkFontMgr.h"
+#include "include/ports/SkFontMgr_directory.h"
+
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <zlib.h>
@@ -16,7 +31,9 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <memory>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -774,25 +791,145 @@ void show(std::string_view body) {
 	}
 }
 
-void load(ConnectionManager& cm, URL url) {
-	std::string body = cm.request(url);
-	show(body);
-}
+int const WIDTH  = 800;
+int const HEIGHT = 600;
+
+class Browser {
+	SDL_Window *m_window;
+	SDL_Renderer *m_renderer;
+	SDL_Texture *m_texture;
+	sk_sp<SkSurface> m_root_surface;
+	SkImageInfo m_surface_info;
+	sk_sp<SkFontMgr> m_font_mgr;
+
+public:
+	static std::optional<Browser> create() {
+		// todo: change to OpenGL
+		SDL_Window *window = SDL_CreateWindow("Ladybug", WIDTH, HEIGHT, 0);
+
+		if (window == nullptr) {
+			SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not create window: %s\n", SDL_GetError());
+			return std::nullopt;
+		}
+		SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
+		SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
+
+		SkImageInfo info = SkImageInfo::Make(WIDTH, HEIGHT, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+		SkSurfaceProps surface_props;
+		size_t row_bytes = WIDTH * 4;
+		sk_sp<SkSurface> root_surface = SkSurfaces::Raster(info, row_bytes, &surface_props);
+		assert(root_surface);
+
+		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
+		assert(font_mgr);
+
+		return Browser(window, renderer, texture, root_surface, info, font_mgr);
+	}
+
+	void load(ConnectionManager& cm, URL url) {
+		std::string body = cm.request(url);
+		// show(body);
+
+		auto canvas = m_root_surface->getCanvas();
+		canvas->clear(SK_ColorWHITE);
+
+		SkPaint paint;
+		paint.setColor(SK_ColorCYAN);
+		canvas->drawRect(SkRect::MakeLTRB(10, 20, 400, 300), paint);
+
+		paint.setColor(SK_ColorRED);
+		canvas->drawOval(SkRect::MakeLTRB(100, 100, 150, 150), paint);
+
+		sk_sp<SkTypeface> typeface = m_font_mgr->matchFamilyStyle("Arial", SkFontStyle());
+		assert(typeface);
+		SkFont font(typeface, 12);
+		paint.setColor(SK_ColorBLACK);
+		canvas->drawString("Hi!", 200, 150, font, paint);
+
+		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
+
+		// todo: change to m_row_bytes
+		size_t row_bytes = WIDTH * 4;
+
+		std::vector<uint8_t> pixels(HEIGHT * WIDTH * 4);
+		if (!image->readPixels(m_surface_info, pixels.data(), row_bytes, 0, 0)) {
+			// todo: error
+			assert(false);
+		}
+
+		SDL_UpdateTexture(m_texture, nullptr, pixels.data(), row_bytes);
+
+		SDL_RenderClear(m_renderer);
+		SDL_RenderTexture(m_renderer, m_texture, nullptr, nullptr);
+		SDL_RenderPresent(m_renderer);
+	}
+
+	void destroy() {
+		SDL_DestroyTexture(m_texture);
+		SDL_DestroyRenderer(m_renderer);
+		SDL_DestroyWindow(m_window);
+	}
+
+private:
+	Browser(
+		SDL_Window *window,
+		SDL_Renderer *renderer,
+		SDL_Texture *texture,
+		sk_sp<SkSurface> root_surface,
+		SkImageInfo surface_info,
+		sk_sp<SkFontMgr> font_mgr
+	)
+		: m_window(window)
+		, m_renderer(renderer)
+		, m_texture(texture)
+		, m_root_surface(root_surface)
+		, m_surface_info(surface_info)
+		, m_font_mgr(font_mgr)
+	{}
+};
 
 int main(int argc, char** argv) {
+	SDL_Window *window;
+	bool done = false;
+
+	SDL_Init(SDL_INIT_VIDEO);
+
+	auto b = Browser::create();
+	if (!b.has_value()) {
+		SDL_Quit();
+		return 1;
+	}
+	Browser browser = b.value();
+
 	SSL_library_init();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
 
 	auto connection_manager = ConnectionManager();
-	if (argc == 1) {
-		URL url = URL("file:///home/ababo/dev/browser/index.html");
-		load(connection_manager, url);
-	} else {
-		for (int i = 1; i < argc; i++) {
-			URL url = URL(argv[i]);
-			load(connection_manager, url);
+	URL url = [&] {
+		if (argc == 1) {
+			return URL("file:///home/ababo/dev/browser/index.html");
+		} else if (argc == 2) {
+			return URL(argv[1]);
+		} else {
+			assert(false && "Invalid arguments");
+		}
+	}();
+	browser.load(connection_manager, url);
+
+	while (!done) {
+		SDL_Event event;
+
+		while (SDL_PollEvent(&event)) {
+			if (event.type == SDL_EVENT_QUIT) {
+				done = true;
+			}
 		}
 	}
+
+	browser.destroy();
+
+	SDL_Quit();
+
 	return 0;
 }

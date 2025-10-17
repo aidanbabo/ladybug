@@ -1,6 +1,12 @@
 {
   "dependencies": [
-    "sdl3",
-    "skia"
+    {
+      "name": "skia",
+      "features": ["freetype", "fontconfig", "harfbuzz"]
+    },
+    "freetype",
+    "fontconfig",
+    "harfbuzz",
+    "sdl3"
   ]
 }
