@@ -38,8 +38,8 @@
 #include <unordered_map>
 #include <vector>
 
-int const WIDTH  = 800;
-int const HEIGHT = 600;
+int const INITIAL_WIDTH  = 800;
+int const INITIAL_HEIGHT = 600;
 int const SCROLL_STEP = 100;
 int const HSTEP = 13;
 int const VSTEP = 18;
@@ -806,7 +806,7 @@ struct CharacterPosition {
 	char c;
 };
 
-std::vector<CharacterPosition> layout(std::string text) {
+std::vector<CharacterPosition> layout(std::string text, int width) {
 	int cursor_x = HSTEP;
 	int cursor_y = VSTEP;
 	std::vector<CharacterPosition> display_list;
@@ -827,12 +827,22 @@ std::vector<CharacterPosition> layout(std::string text) {
 
 		cursor_x += HSTEP;
 
-		if (cursor_x >= WIDTH - HSTEP) {
+		if (cursor_x >= width - HSTEP) {
 			cursor_y += VSTEP;
 			cursor_x = HSTEP;
 		}
 	}
 	return display_list;
+}
+
+void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Texture *&texture, sk_sp<SkSurface> &root_surface, SkImageInfo &info) {
+	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+
+	info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+	SkSurfaceProps surface_props;
+	size_t row_bytes = width * 4;
+	root_surface = SkSurfaces::Raster(info, row_bytes, &surface_props);
+	assert(root_surface);
 }
 
 
@@ -845,24 +855,26 @@ class Browser {
 	sk_sp<SkFontMgr> m_font_mgr;
 	std::vector<CharacterPosition> m_display_list;
 	int m_scroll = 0;
+	int m_width = INITIAL_WIDTH;
+	int m_height = INITIAL_HEIGHT;
+	std::string m_text;
 
 public:
 	static std::optional<Browser> create() {
 		// todo: change to OpenGL
-		SDL_Window *window = SDL_CreateWindow("Ladybug", WIDTH, HEIGHT, 0);
+		SDL_Window *window = SDL_CreateWindow("Ladybug", INITIAL_WIDTH, INITIAL_HEIGHT, SDL_WINDOW_RESIZABLE);
 
 		if (window == nullptr) {
 			SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not create window: %s\n", SDL_GetError());
 			return std::nullopt;
 		}
-		SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
-		SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
 
-		SkImageInfo info = SkImageInfo::Make(WIDTH, HEIGHT, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-		SkSurfaceProps surface_props;
-		size_t row_bytes = WIDTH * 4;
-		sk_sp<SkSurface> root_surface = SkSurfaces::Raster(info, row_bytes, &surface_props);
-		assert(root_surface);
+		SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
+
+		SDL_Texture *texture;
+		SkImageInfo info;
+		sk_sp<SkSurface> root_surface;
+		initialize_texture(renderer, INITIAL_WIDTH, INITIAL_HEIGHT, texture, root_surface, info);
 
 		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
 		assert(font_mgr);
@@ -872,8 +884,8 @@ public:
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
-		std::string text = lex(body);
-		m_display_list = layout(text);
+		m_text = lex(body);
+		m_display_list = layout(m_text, m_width);
 		draw();
 	}
 	
@@ -890,7 +902,7 @@ public:
 
 		for (auto cpos : m_display_list) {
 			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
-			if (cpos.y > m_scroll + HEIGHT + VSTEP) continue;
+			if (cpos.y > m_scroll + m_height + VSTEP) continue;
 			if (cpos.y + VSTEP < m_scroll) continue;
 			std::string s(1, cpos.c);
 			canvas->drawString(s.c_str(), cpos.x, cpos.y - m_scroll, font, paint);
@@ -899,9 +911,9 @@ public:
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
 
 		// todo: change to m_row_bytes
-		size_t row_bytes = WIDTH * 4;
+		size_t row_bytes = m_width * 4;
 
-		std::vector<uint8_t> pixels(HEIGHT * WIDTH * 4);
+		std::vector<uint8_t> pixels(m_height * m_width * 4);
 		if (!image->readPixels(m_surface_info, pixels.data(), row_bytes, 0, 0)) {
 			// todo: error
 			assert(false);
@@ -912,6 +924,17 @@ public:
 		SDL_RenderClear(m_renderer);
 		SDL_RenderTexture(m_renderer, m_texture, nullptr, nullptr);
 		SDL_RenderPresent(m_renderer);
+	}
+
+	void resize(int new_width, int new_height) {
+		m_width = new_width;
+		m_height = new_height;
+		SDL_DestroyTexture(m_texture);
+
+		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
+
+		m_display_list = layout(m_text, m_width);
+		draw();
 	}
 
 	void scroll_up() {
@@ -987,6 +1010,10 @@ int main(int argc, char** argv) {
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_EVENT_QUIT) {
 				done = true;
+			} else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
+				int width = event.window.data1;
+				int height = event.window.data2;
+				browser.resize(width, height);
 			} else if (event.type == SDL_EVENT_KEY_DOWN) {
 				if (event.key.key == SDLK_DOWN) {
 					browser.scroll_down();
