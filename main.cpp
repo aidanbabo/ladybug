@@ -814,6 +814,13 @@ std::vector<CharacterPosition> layout(std::string text) {
 	// todo: unicode
 	// todo: newlines
 	for (char c : text) {
+
+		if (c == '\n') {
+			cursor_y += VSTEP + VSTEP / 2;
+			cursor_x = HSTEP;
+			continue;
+		}
+
 		auto pos = (CharacterPosition){
 			.x = cursor_x,
 			.y = cursor_y,
