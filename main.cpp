@@ -38,6 +38,12 @@
 #include <unordered_map>
 #include <vector>
 
+int const WIDTH  = 800;
+int const HEIGHT = 600;
+int const SCROLL_STEP = 100;
+int const HSTEP = 13;
+int const VSTEP = 18;
+
 std::string escape(std::string source) {
 	std::string output;
 	for (char c : source) {
@@ -749,30 +755,32 @@ private:
 	}
 };
 
-int unescape_sequence(std::string_view body, int i) {
+// lowkey hate implicit mutable references, but pairs also suck...
+char unescape_sequence(std::string_view body, int &i) {
 	assert(i + 2 < body.length());
 	char c2 = body[i];
 	char c3 = body[i + 1];
 	char c4 = body[i + 2];
 	if (c2 == 'l' && c3 == 't' && c4 == ';') {
-		std::cout << '<';
-		return i + 3;
+		i += 3;
+		return '<';
 	} else if (c2 == 'g' && c3 == 't' && c4 == ';') {
-		std::cout << '>';
-		return i + 3;
+		i += 3;
+		return '>';
 	} else {
 		assert(i + 3 < body.length());
 		char c5 = body[i + 3];
 		if (c2 == 'a' && c3 == 'm' && c4 == 'p' && c5 == ';') {
-			std::cout << '&';
-			return i + 4;
+			i += 4;
+			return '&';
 		}
 	}
-	std::cout << '&';
-	return i + 1;
+	i += 1;
+	return '&';
 }
 
-void show(std::string_view body) {
+std::string lex(std::string_view body) {
+	std::string out;
 	int i = 0;
 	bool in_tag = false;
 	while (i < body.length()) {
@@ -783,16 +791,46 @@ void show(std::string_view body) {
 			in_tag = false;
 		} else if (!in_tag) {
 			if (c == '&') {
-				i = unescape_sequence(body, i);
+				out.push_back(unescape_sequence(body, i));
 			} else { 
-				std::cout << c;
+				out.push_back(c);
 			}
 		}
 	}
+	return out;
 }
 
-int const WIDTH  = 800;
-int const HEIGHT = 600;
+struct CharacterPosition {
+	int x, y;
+	// todo: support unicode
+	char c;
+};
+
+std::vector<CharacterPosition> layout(std::string text) {
+	int cursor_x = HSTEP;
+	int cursor_y = VSTEP;
+	std::vector<CharacterPosition> display_list;
+	// todo: use skia native tools?
+	// todo: unicode
+	// todo: newlines
+	for (char c : text) {
+		auto pos = (CharacterPosition){
+			.x = cursor_x,
+			.y = cursor_y,
+			.c = c,
+		};
+		display_list.push_back(pos);
+
+		cursor_x += HSTEP;
+
+		if (cursor_x >= WIDTH - HSTEP) {
+			cursor_y += VSTEP;
+			cursor_x = HSTEP;
+		}
+	}
+	return display_list;
+}
+
 
 class Browser {
 	SDL_Window *m_window;
@@ -801,6 +839,8 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
+	std::vector<CharacterPosition> m_display_list;
+	int m_scroll = 0;
 
 public:
 	static std::optional<Browser> create() {
@@ -828,23 +868,28 @@ public:
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
-		// show(body);
+		std::string text = lex(body);
+		m_display_list = layout(text);
+		draw();
+	}
+	
+	void draw() {
+		sk_sp<SkTypeface> typeface = m_font_mgr->matchFamilyStyle("Arial", SkFontStyle());
+		assert(typeface);
+		SkFont font(typeface, 12);
+
+		SkPaint paint;
+		paint.setColor(SK_ColorBLACK);
 
 		auto canvas = m_root_surface->getCanvas();
 		canvas->clear(SK_ColorWHITE);
 
-		SkPaint paint;
-		paint.setColor(SK_ColorCYAN);
-		canvas->drawRect(SkRect::MakeLTRB(10, 20, 400, 300), paint);
-
-		paint.setColor(SK_ColorRED);
-		canvas->drawOval(SkRect::MakeLTRB(100, 100, 150, 150), paint);
-
-		sk_sp<SkTypeface> typeface = m_font_mgr->matchFamilyStyle("Arial", SkFontStyle());
-		assert(typeface);
-		SkFont font(typeface, 12);
-		paint.setColor(SK_ColorBLACK);
-		canvas->drawString("Hi!", 200, 150, font, paint);
+		for (auto cpos : m_display_list) {
+			if (cpos.y > m_scroll + HEIGHT) continue;
+			if (cpos.y + VSTEP < m_scroll) continue;
+			std::string s(1, cpos.c);
+			canvas->drawString(s.c_str(), cpos.x, cpos.y - m_scroll, font, paint);
+		}
 
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
 
@@ -862,6 +907,11 @@ public:
 		SDL_RenderClear(m_renderer);
 		SDL_RenderTexture(m_renderer, m_texture, nullptr, nullptr);
 		SDL_RenderPresent(m_renderer);
+	}
+
+	void scroll_down() {
+		m_scroll += SCROLL_STEP;
+		draw();
 	}
 
 	void destroy() {
@@ -885,6 +935,7 @@ private:
 		, m_root_surface(root_surface)
 		, m_surface_info(surface_info)
 		, m_font_mgr(font_mgr)
+		, m_display_list()
 	{}
 };
 
@@ -923,6 +974,12 @@ int main(int argc, char** argv) {
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_EVENT_QUIT) {
 				done = true;
+			}
+
+			if (event.type == SDL_EVENT_KEY_DOWN) {
+				if (event.key.key == SDLK_DOWN) {
+					browser.scroll_down();
+				}
 			}
 		}
 	}
