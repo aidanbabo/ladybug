@@ -1,3 +1,5 @@
+// todo: Exercise 2-5: Emoji
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
@@ -85,55 +87,96 @@ std::vector<std::string> split(std::string s, std::string const& delimiter, int 
 }
 
 struct URL {
-	bool view_source = false;
+	bool view_source;
 	std::string scheme;
 	std::string host;
 	uint16_t port;
 	std::string path;
 
-	URL(std::string_view url) {
-		auto n = url.find(":");
-		assert(n != std::string::npos);
-		scheme = url.substr(0, n);
+	static std::optional<URL> create(std::string_view string) {
+		auto n = string.find(":");
+		if (n == std::string::npos) {
+			std::cerr << "Expected scheme in URL" << std::endl;
+			return std::nullopt;
+		}
+		std::string scheme(string.substr(0, n));
 
+		bool view_source = false;
 		if (scheme == "view-source") {
 			view_source = true;
-			url = url.substr(n + 1);
+			string = string.substr(n + 1);
 
-			n = url.find(":");
-			assert(n != std::string::npos);
-			scheme = url.substr(0, n);
+			n = string.find(":");
+			if (n == std::string::npos) {
+				std::cerr << "Expected scheme after view-source in URL" << std::endl;
+				return std::nullopt;
+			}
+			scheme = string.substr(0, n);
 		}
 
-		constexpr std::array supported_protocols{"http", "https", "file", "data"};
+		constexpr std::array supported_protocols{"http", "https", "file", "data", "about"};
 		bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), scheme) != supported_protocols.end();
-		assert(supported);
-		if (scheme == "data") {
-			url = url.substr(n + 1);
+		if (!supported) {
+			std::cerr << "Unsupported protocol " << scheme << " in URL" << std::endl;
+			return std::nullopt;
+		}
+
+		if (scheme == "data" || scheme == "about") {
+			string = string.substr(n + 1);
 		} else {
-			assert(url.substr(n + 1, 2) == "//");
-			url = url.substr(n + 3);
+			if (string.substr(n + 1, 2) != "//") {
+				std::cerr << "Expected '//' after scheme: in URL" << std::endl;
+				return std::nullopt;
+			}
+			string = string.substr(n + 3);
 		}
 
 		if (scheme == "data") {
-			n = url.find(",");
-			assert(n != std::string::npos);
-			assert(url.substr(0, n) == "text/html");
-			// not really what this is for storing...
-			path = url.substr(n + 1);
-			return;
+			n = string.find(",");
+			if (n == std::string::npos) {
+				std::cerr << "Expected ',' in data url" << std::endl;
+				return std::nullopt;
+			}
+			if (string.substr(0, n) != "text/html") {
+				std::cerr << "Unsupported MIME type " << string.substr(0, n) << " in URL" << std::endl;
+				return std::nullopt;
+			}
+			// todo: make URL an enum (Rust style) or abstract class (OO style)
+			// this isn't really what path is for...
+			std::string path(string.substr(n + 1));
+			return URL {
+				.view_source = view_source,
+				.scheme = scheme,
+				.host = "",
+				.port = 0,
+				.path = path,
+			};
+		} else if (scheme == "about") {
+			if (string != "blank") {
+				std::cerr << "Unsupported about page " << string << " in URL" << std::endl;
+				return std::nullopt;
+			}
+			return URL {
+				.view_source = view_source,
+				.scheme = scheme,
+				.host = "blank",
+				.port = 0,
+				.path = "",
+			};
 		}
 
-		n = url.find("/");
+		std::string host, path;
+		n = string.find("/");
 		if (n == std::string::npos) {
-			host = url;
+			host = string;
 			path = "/";
 		} else {
-			host = url.substr(0, n);
-			path = url.substr(n);
+			host = string.substr(0, n);
+			path = string.substr(n);
 		}
 
 		n = host.find(":");
+		uint16_t port;
 		if (n != std::string::npos) {
 			port = std::stoi(host.substr(n + 1));
 			host = host.substr(0, n);
@@ -151,14 +194,15 @@ struct URL {
 			assert(host == "");
 			assert(port == 0);
 		}
-	}
 
-	URL(std::string scheme, std::string host, uint16_t port) 
-		: scheme(scheme)
-		, host(host)
-		, port(port)
-		, path("/")
-	{}
+		return URL {
+			.view_source = view_source,
+			.scheme = scheme,
+			.host = host,
+			.port = port,
+			.path = path,
+		};
+	}
 
 	std::string base() const {
 		return scheme + "://" + host + ":" + std::to_string(port);
@@ -169,6 +213,7 @@ struct URL {
 	}
 
 	std::string to_string() const {
+		// todo: add view-source?
 		return scheme + "://" + host + ":" + std::to_string(port) + path;
 	}
 };
@@ -601,6 +646,7 @@ struct CachedHttpResponse {
 	std::time_t expires_at;
 };
 
+// Some URLs don't need a ConnectionManager at all! Should we allow them to get their contents without access to a ConnectionManager?
 class ConnectionManager {
 	// default ctor and dtor? handle this (and the HttpConnections) correctly?
 	std::unordered_map<std::string, HttpConnection *> m_active_connections;
@@ -616,8 +662,14 @@ public:
 			response = url.path;
 		} else if (url.scheme == "http" || url.scheme == "https") {
 			response = load_from_cache_or_fetch(url);
+		} else if (url.scheme == "about") {
+			if (url.host == "blank") {
+				response = "";
+			} else {
+				assert(false && "unreachable");
+			}
 		} else {
-			assert(false);
+			assert(false && "unreachable");
 		}
 
 		if (url.view_source) {
@@ -740,7 +792,7 @@ private:
 				if (location.rfind("/", 0) == 0) { // starts_with
 					url.path = location;
 				} else {
-					url = URL(location);
+					url = URL::create(location).value_or(URL::create("about:blank").value());
 				}
 				std::cerr << "Redirected to " << url.to_string() << std::endl;
 				continue;
@@ -1023,14 +1075,16 @@ int main(int argc, char** argv) {
 
 	auto connection_manager = ConnectionManager();
 	URL url = [&] {
+		// todo: how to make value_or lazy
 		if (argc == 1) {
-			return URL("file:///home/ababo/dev/browser/index.html");
+			return URL::create("file:///home/ababo/dev/browser/index.html").value_or(URL::create("about:blank").value());
 		} else if (argc == 2) {
-			return URL(argv[1]);
+			return URL::create(argv[1]).value_or(URL::create("about:blank").value());
 		} else {
 			assert(false && "Invalid arguments");
 		}
 	}();
+
 	browser.load(connection_manager, url);
 
 	while (!done) {
