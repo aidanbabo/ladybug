@@ -979,7 +979,7 @@ public:
 			float scrollbar_size = scrollbar_ratio * (float) m_height;
 			float scrollbar_start = scrollbar_ratio * (float) m_scroll;
 			paint.setColor(SK_ColorBLUE);
-			canvas->drawRect(SkRect::MakeLTRB(m_width - 10, scrollbar_start, m_width, scrollbar_start + scrollbar_size), paint);
+			canvas->drawRect(SkRect::MakeLTRB(m_width - HSTEP, scrollbar_start, m_width, scrollbar_start + scrollbar_size), paint);
 		}
 
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
