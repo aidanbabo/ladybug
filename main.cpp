@@ -863,16 +863,33 @@ struct Layout {
 	int must_render_up_to_y;
 };
 
-Layout layout(std::string text, int width) {
+void align_to_right(std::vector<CharacterPosition> &display_list, int from_index, int width) {
+	if (from_index >= display_list.size()) {
+		return;
+	}
+
+	int gap = width - display_list[display_list.size() - 1].x - HSTEP;
+
+	for (int i = display_list.size() - 1; i >= from_index; i--) {
+		display_list[i].x += gap;
+	}
+}
+
+Layout layout(std::string text, int width, bool right_align) {
 	int cursor_x = HSTEP;
 	int cursor_y = VSTEP;
 	std::vector<CharacterPosition> display_list;
 	int must_render_up_to_y = cursor_y;
+	int current_line_start_index = 0;
 	// todo: use skia native tools?
 	for (char c : text) {
 		if (c == '\n') {
 			cursor_y += VSTEP + VSTEP / 2;
 			cursor_x = HSTEP;
+			if (right_align) {
+				align_to_right(display_list, current_line_start_index, width);
+				current_line_start_index = display_list.size();
+			}
 			continue;
 		}
 
@@ -891,8 +908,17 @@ Layout layout(std::string text, int width) {
 		if (cursor_x >= width - HSTEP) {
 			cursor_y += VSTEP;
 			cursor_x = HSTEP;
+			if (right_align) {
+				align_to_right(display_list, current_line_start_index, width);
+				current_line_start_index = display_list.size();
+			}
 		}
 	}
+
+	if (right_align) {
+		align_to_right(display_list, current_line_start_index, width);
+	}
+
 	return {
 		.display_list = display_list,
 		.must_render_up_to_y = must_render_up_to_y,
@@ -922,6 +948,8 @@ class Browser {
 	int m_scroll = 0;
 	int m_width = INITIAL_WIDTH;
 	int m_height = INITIAL_HEIGHT;
+	// todo: make a cli arg! find a library for this!
+	bool m_right_align = false;
 
 public:
 	static std::optional<Browser> create() {
@@ -949,7 +977,7 @@ public:
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
 		m_text = lex(body);
-		m_layout = layout(m_text, m_width);
+		m_layout = layout(m_text, m_width, m_right_align);
 		draw();
 	}
 	
@@ -1007,7 +1035,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = layout(m_text, m_width);
+		m_layout = layout(m_text, m_width, m_right_align);
 		draw();
 	}
 
