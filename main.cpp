@@ -806,10 +806,16 @@ struct CharacterPosition {
 	char c;
 };
 
-std::vector<CharacterPosition> layout(std::string text, int width) {
+struct Layout {
+	std::vector<CharacterPosition> display_list;
+	int must_render_up_to_y;
+};
+
+Layout layout(std::string text, int width) {
 	int cursor_x = HSTEP;
 	int cursor_y = VSTEP;
 	std::vector<CharacterPosition> display_list;
+	int must_render_up_to_y = cursor_y;
 	// todo: use skia native tools?
 	for (char c : text) {
 		if (c == '\n') {
@@ -824,6 +830,9 @@ std::vector<CharacterPosition> layout(std::string text, int width) {
 			.c = c,
 		};
 		display_list.push_back(pos);
+		if (cursor_y + VSTEP > must_render_up_to_y) {
+			must_render_up_to_y = cursor_y + VSTEP;
+		}
 
 		cursor_x += HSTEP;
 
@@ -832,7 +841,10 @@ std::vector<CharacterPosition> layout(std::string text, int width) {
 			cursor_x = HSTEP;
 		}
 	}
-	return display_list;
+	return {
+		.display_list = display_list,
+		.must_render_up_to_y = must_render_up_to_y,
+	};
 }
 
 void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Texture *&texture, sk_sp<SkSurface> &root_surface, SkImageInfo &info) {
@@ -853,11 +865,11 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
-	std::vector<CharacterPosition> m_display_list;
+	std::string m_text;
+	Layout m_layout;
 	int m_scroll = 0;
 	int m_width = INITIAL_WIDTH;
 	int m_height = INITIAL_HEIGHT;
-	std::string m_text;
 
 public:
 	static std::optional<Browser> create() {
@@ -885,7 +897,7 @@ public:
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
 		m_text = lex(body);
-		m_display_list = layout(m_text, m_width);
+		m_layout = layout(m_text, m_width);
 		draw();
 	}
 	
@@ -900,12 +912,22 @@ public:
 		auto canvas = m_root_surface->getCanvas();
 		canvas->clear(SK_ColorWHITE);
 
-		for (auto cpos : m_display_list) {
+		// content
+		for (auto cpos : m_layout.display_list) {
 			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
 			if (cpos.y > m_scroll + m_height + VSTEP) continue;
 			if (cpos.y + VSTEP < m_scroll) continue;
 			std::string s(1, cpos.c);
 			canvas->drawString(s.c_str(), cpos.x, cpos.y - m_scroll, font, paint);
+		}
+
+		// scrollbar
+		if (m_height < m_layout.must_render_up_to_y) {
+			float scrollbar_ratio = (float) m_height / (float) m_layout.must_render_up_to_y;
+			float scrollbar_size = scrollbar_ratio * (float) m_height;
+			float scrollbar_start = scrollbar_ratio * (float) m_scroll;
+			paint.setColor(SK_ColorBLUE);
+			canvas->drawRect(SkRect::MakeLTRB(m_width - 10, scrollbar_start, m_width, scrollbar_start + scrollbar_size), paint);
 		}
 
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
@@ -933,7 +955,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_display_list = layout(m_text, m_width);
+		m_layout = layout(m_text, m_width);
 		draw();
 	}
 
@@ -947,6 +969,13 @@ public:
 
 	void scroll_down() {
 		m_scroll += SCROLL_STEP;
+		int max_scroll = m_layout.must_render_up_to_y - m_height;
+		if (max_scroll < 0) {
+			max_scroll = 0;
+		}
+		if (m_scroll > max_scroll) {
+			m_scroll = max_scroll;
+		}
 		draw();
 	}
 
@@ -971,7 +1000,7 @@ private:
 		, m_root_surface(root_surface)
 		, m_surface_info(surface_info)
 		, m_font_mgr(font_mgr)
-		, m_display_list()
+		, m_layout()
 	{}
 };
 
