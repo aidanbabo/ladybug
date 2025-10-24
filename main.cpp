@@ -851,18 +851,18 @@ std::string lex(std::string_view body) {
 	return out;
 }
 
-struct CharacterPosition {
+struct StringPosition {
 	int x, y;
 	// todo: support unicode
-	char c;
+	std::string string;
 };
 
 struct Layout {
-	std::vector<CharacterPosition> display_list;
+	std::vector<StringPosition> display_list;
 	int must_render_up_to_y;
 };
 
-void align_to_right(std::vector<CharacterPosition> &display_list, size_t from_index, int width) {
+void align_to_right(std::vector<StringPosition> &display_list, size_t from_index, int width) {
 	if (from_index >= display_list.size()) {
 		return;
 	}
@@ -874,43 +874,52 @@ void align_to_right(std::vector<CharacterPosition> &display_list, size_t from_in
 	}
 }
 
-Layout layout(std::string text, int width, bool right_align) {
+Layout layout(std::string text, SkFont font, int width, bool right_align) {
 	int cursor_x = HSTEP;
 	int cursor_y = VSTEP;
-	std::vector<CharacterPosition> display_list;
+	std::vector<StringPosition> display_list;
 	int must_render_up_to_y = cursor_y;
 	int current_line_start_index = 0;
 	// todo: use skia native tools?
-	for (char c : text) {
-		if (c == '\n') {
-			cursor_y += VSTEP + VSTEP / 2;
-			cursor_x = HSTEP;
-			if (right_align) {
-				align_to_right(display_list, current_line_start_index, width);
-				current_line_start_index = display_list.size();
+	
+	auto lines = split(text, "\n");
+	for (auto line : lines) {
+		auto words = split(line, " ");
+		for (auto word : words) {
+			// todo: other text encodings
+			auto w = font.measureText(word.c_str(), word.size(), SkTextEncoding::kUTF8);
+
+			if (cursor_x + w >= width - HSTEP) {
+				// todo: adjust
+				cursor_y += font.getSpacing() * 1.25;
+				cursor_x = HSTEP;
+
+				if (right_align) {
+					align_to_right(display_list, current_line_start_index, width);
+					current_line_start_index = display_list.size();
+				}
 			}
-			continue;
+
+			auto pos = StringPosition {
+				.x = cursor_x,
+				.y = cursor_y,
+				.string = word,
+			};
+			display_list.push_back(pos);
+			if (cursor_y + VSTEP > must_render_up_to_y) {
+				must_render_up_to_y = cursor_y + VSTEP;
+			}
+
+			// todo: other text encodings
+			cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
 		}
 
-		auto pos = CharacterPosition {
-			.x = cursor_x,
-			.y = cursor_y,
-			.c = c,
-		};
-		display_list.push_back(pos);
-		if (cursor_y + VSTEP > must_render_up_to_y) {
-			must_render_up_to_y = cursor_y + VSTEP;
-		}
-
-		cursor_x += HSTEP;
-
-		if (cursor_x >= width - HSTEP) {
-			cursor_y += VSTEP;
-			cursor_x = HSTEP;
-			if (right_align) {
-				align_to_right(display_list, current_line_start_index, width);
-				current_line_start_index = display_list.size();
-			}
+		// todo: adjust
+		cursor_y += font.getSpacing() * 1.5;
+		cursor_x = HSTEP;
+		if (right_align) {
+			align_to_right(display_list, current_line_start_index, width);
+			current_line_start_index = display_list.size();
 		}
 	}
 
@@ -942,6 +951,7 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
+	SkFont m_font;
 	std::string m_text;
 	Layout m_layout;
 	int m_scroll = 0;
@@ -970,21 +980,21 @@ public:
 		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
 		assert(font_mgr);
 
-		return Browser(window, renderer, texture, root_surface, info, font_mgr);
+		sk_sp<SkTypeface> typeface = font_mgr->matchFamilyStyle("Arial", SkFontStyle());
+		assert(typeface);
+		SkFont font(typeface, 16);
+
+		return Browser(window, renderer, texture, root_surface, info, font_mgr, font);
 	}
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
 		m_text = lex(body);
-		m_layout = layout(m_text, m_width, m_right_align);
+		m_layout = layout(m_text, m_font, m_width, m_right_align);
 		draw();
 	}
 	
 	void draw() {
-		sk_sp<SkTypeface> typeface = m_font_mgr->matchFamilyStyle("Arial", SkFontStyle());
-		assert(typeface);
-		SkFont font(typeface, 12);
-
 		SkPaint paint;
 		paint.setColor(SK_ColorBLACK);
 
@@ -996,8 +1006,7 @@ public:
 			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
 			if (cpos.y > m_scroll + m_height + VSTEP) continue;
 			if (cpos.y + VSTEP < m_scroll) continue;
-			std::string s(1, cpos.c);
-			canvas->drawString(s.c_str(), cpos.x, cpos.y - m_scroll, font, paint);
+			canvas->drawString(cpos.string.c_str(), cpos.x, cpos.y - m_scroll, m_font, paint);
 		}
 
 		// scrollbar
@@ -1034,7 +1043,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = layout(m_text, m_width, m_right_align);
+		m_layout = layout(m_text, m_font, m_width, m_right_align);
 		draw();
 	}
 
@@ -1071,7 +1080,8 @@ private:
 		SDL_Texture *texture,
 		sk_sp<SkSurface> root_surface,
 		SkImageInfo surface_info,
-		sk_sp<SkFontMgr> font_mgr
+		sk_sp<SkFontMgr> font_mgr,
+		SkFont font
 	)
 		: m_window(window)
 		, m_renderer(renderer)
@@ -1079,6 +1089,7 @@ private:
 		, m_root_surface(root_surface)
 		, m_surface_info(surface_info)
 		, m_font_mgr(font_mgr)
+		, m_font(font)
 		, m_layout()
 	{}
 };
