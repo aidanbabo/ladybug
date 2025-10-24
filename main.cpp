@@ -74,7 +74,7 @@ std::vector<std::string> split(std::string s, std::string const& delimiter, int 
 	size_t start = 0;
 	for (;;) {
 		size_t end_pos = s.find(delimiter, start);
-		if (end_pos == std::string::npos || items.size() == nsplits) {
+		if (end_pos == std::string::npos || (int) items.size() == nsplits) {
 			std::string item = s.substr(start);
 			items.push_back(item);
 			return items;
@@ -377,7 +377,7 @@ public:
 
 			for (;;) {
 
-				int line_end = received.find("\r\n");
+				auto line_end = received.find("\r\n");
 				if (line_end == std::string::npos) {
 					break;
 				}
@@ -575,6 +575,7 @@ private:
 				switch (ret) {
 				case Z_NEED_DICT:
 					ret = Z_DATA_ERROR;
+					[[fallthrough]];
 				case Z_DATA_ERROR:
 				case Z_MEM_ERROR:
 					inflateEnd(zstream);
@@ -588,9 +589,7 @@ private:
 		} else {
 			response.body.append(next_in, avail_in);
 		}
-
 	}
-
 
 	void write(std::string data) {
 		if (is_encrypted()) {
@@ -808,7 +807,7 @@ private:
 };
 
 // lowkey hate implicit mutable references, but pairs also suck...
-char unescape_sequence(std::string_view body, int &i) {
+char unescape_sequence(std::string_view body, size_t &i) {
 	assert(i + 2 < body.length());
 	char c2 = body[i];
 	char c3 = body[i + 1];
@@ -833,7 +832,7 @@ char unescape_sequence(std::string_view body, int &i) {
 
 std::string lex(std::string_view body) {
 	std::string out;
-	int i = 0;
+	size_t i = 0;
 	bool in_tag = false;
 	while (i < body.length()) {
 		char c = body[i++];
@@ -863,14 +862,14 @@ struct Layout {
 	int must_render_up_to_y;
 };
 
-void align_to_right(std::vector<CharacterPosition> &display_list, int from_index, int width) {
+void align_to_right(std::vector<CharacterPosition> &display_list, size_t from_index, int width) {
 	if (from_index >= display_list.size()) {
 		return;
 	}
 
 	int gap = width - display_list[display_list.size() - 1].x - HSTEP;
 
-	for (int i = display_list.size() - 1; i >= from_index; i--) {
+	for (auto i = display_list.size() - 1; i >= from_index; i--) {
 		display_list[i].x += gap;
 	}
 }
@@ -893,7 +892,7 @@ Layout layout(std::string text, int width, bool right_align) {
 			continue;
 		}
 
-		auto pos = (CharacterPosition){
+		auto pos = CharacterPosition {
 			.x = cursor_x,
 			.y = cursor_y,
 			.c = c,
@@ -1085,7 +1084,6 @@ private:
 };
 
 int main(int argc, char** argv) {
-	SDL_Window *window;
 	bool done = false;
 
 	SDL_Init(SDL_INIT_VIDEO);

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 project(ladybug)
+set(CMAKE_CXX_STANDARD 20)
 
 find_package(Freetype REQUIRED)
 find_package(Fontconfig REQUIRED)
@@ -16,3 +17,5 @@ target_link_libraries(ladybug PRIVATE Fontconfig::Fontconfig)
 target_link_libraries(ladybug PRIVATE harfbuzz::harfbuzz)
 target_link_libraries(ladybug PRIVATE SDL3::SDL3)
 target_link_libraries(ladybug PRIVATE unofficial::skia::skia)
+
+target_compile_options(ladybug PRIVATE -Wall -Wextra -Wpedantic)
