@@ -14,6 +14,7 @@
 
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
+#include "include/core/SkFontMetrics.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -830,108 +831,286 @@ char unescape_sequence(std::string_view body, size_t &i) {
 	return '&';
 }
 
-std::string lex(std::string_view body) {
-	std::string out;
+enum class TokenTag {
+	Text,
+	Tag,
+};
+
+struct Token {
+	TokenTag tag;
+	std::string data;
+};
+
+std::vector<Token> lex(std::string_view body) {
+	std::vector<Token> out;
+	std::string buffer;
 	size_t i = 0;
 	bool in_tag = false;
 	while (i < body.length()) {
 		char c = body[i++];
 		if (c == '<') {
 			in_tag = true;
+			if (!buffer.empty()) {
+				out.push_back(Token {
+					.tag = TokenTag::Text,
+					.data = buffer,
+				});
+				buffer = "";
+			}
 		} else if (c == '>') {
 			in_tag = false;
-		} else if (!in_tag) {
-			if (c == '&') {
-				out.push_back(unescape_sequence(body, i));
-			} else { 
-				out.push_back(c);
+			if (!buffer.empty()) {
+				out.push_back(Token {
+					.tag = TokenTag::Tag,
+					.data = buffer,
+				});
+				buffer = "";
 			}
+		} else if (!in_tag && c == '&') {
+			buffer.push_back(unescape_sequence(body, i));
+		} else { 
+			buffer.push_back(c);
 		}
+	}
+
+	if (!in_tag && !buffer.empty()) {
+		out.push_back(Token {
+			.tag = TokenTag::Text,
+			.data = buffer,
+		});
 	}
 	return out;
 }
 
 struct StringPosition {
-	int x, y;
+	float x, y;
 	// todo: support unicode
 	std::string string;
+	// todo: is copying this around cheap?
+	SkFont font;
 };
 
-struct Layout {
+struct ComputedLayout {
 	std::vector<StringPosition> display_list;
-	int must_render_up_to_y;
+	float must_render_up_to_y;
 };
 
-void align_to_right(std::vector<StringPosition> &display_list, size_t from_index, int width) {
-	if (from_index >= display_list.size()) {
-		return;
+struct FontType {
+	sk_sp<SkTypeface> normal;
+	sk_sp<SkTypeface> bold;
+	sk_sp<SkTypeface> italic;
+	sk_sp<SkTypeface> bold_italic;
+};
+
+struct FontInfo {
+	size_t size;
+	bool bold;
+	bool italic;
+
+	bool operator==(const FontInfo& other) const noexcept {
+		return size == other.size && bold == other.bold && italic == other.italic;
 	}
+};
 
-	int gap = width - display_list[display_list.size() - 1].x - HSTEP;
-
-	for (auto i = display_list.size() - 1; i >= from_index; i--) {
-		display_list[i].x += gap;
+template <>
+struct std::hash<FontInfo> {
+	std::size_t operator()(const FontInfo& f) const noexcept {
+		std::size_t h1 = std::hash<size_t>{}(f.size);
+		std::size_t h2 = std::hash<bool>{}(f.bold);
+		std::size_t h3 = std::hash<bool>{}(f.italic);
+		// todo: this sucks
+		return (h1 << 2) ^ (h2 << 1) ^ h3;
 	}
-}
+};
 
-Layout layout(std::string text, SkFont font, int width, bool right_align) {
-	int cursor_x = HSTEP;
-	int cursor_y = VSTEP;
-	std::vector<StringPosition> display_list;
-	int must_render_up_to_y = cursor_y;
-	int current_line_start_index = 0;
-	// todo: use skia native tools?
+class FontCache {
+	std::unordered_map<FontInfo, SkFont> m_fonts;
+	FontType m_font_type;
+
+public:
+	FontCache(FontType ty) : m_font_type(ty) {}
+
+	SkFont& get_font(size_t size, bool bold, bool italic) {
+		auto info = FontInfo {
+			.size = size,
+			.bold = bold,
+			.italic = italic,
+		};
+		if (auto f = m_fonts.find(info); f != m_fonts.end()) {
+			return f->second;
+		}
+
+		sk_sp<SkTypeface> typeface = [&] {
+			if (!bold && !italic) {
+				return m_font_type.normal;
+			} else if (bold && !italic) {
+				return m_font_type.bold;
+			} else if (!bold && italic) {
+				return m_font_type.italic;
+			} else if (bold && italic) {
+				return m_font_type.bold_italic;
+			} else {
+				assert(false && "unreachable");
+			}
+		}();
+		SkFont font(typeface, size);
+		m_fonts.insert({info, font});
+		return m_fonts[info];
+	}
+};
+
+// this approach is odd...
+class Layout {
+	std::vector<StringPosition> m_display_list;
+	float m_cursor_x = HSTEP;
+	float m_cursor_y = VSTEP;
+	float m_must_render_up_to_y = VSTEP;
+	bool m_is_bold = false;
+	bool m_is_italic = false;
+	int m_size = 12;
+	// positions will have useless y coordinates
+	std::vector<StringPosition> m_line;
+
+	int m_width;
+	bool m_right_align;
+
+public:
+	Layout(std::vector<Token> tokens, FontCache &font_cache, int width, bool right_align) {
+		m_width = width;
+		m_right_align = right_align;
+
+		for (Token const& tok : tokens) {
+			token(tok, font_cache);
+		}
 	
-	auto lines = split(text, "\n");
-	for (auto line : lines) {
-		auto words = split(line, " ");
-		for (auto word : words) {
-			// todo: other text encodings
-			auto w = font.measureText(word.c_str(), word.size(), SkTextEncoding::kUTF8);
+		flush();
+	}
 
-			if (cursor_x + w >= width - HSTEP) {
-				// todo: adjust
-				cursor_y += font.getSpacing() * 1.25;
-				cursor_x = HSTEP;
+	ComputedLayout computed() const {
+		return {
+			.display_list = std::move(m_display_list),
+			.must_render_up_to_y = m_must_render_up_to_y,
+		};
+	}
 
-				if (right_align) {
-					align_to_right(display_list, current_line_start_index, width);
-					current_line_start_index = display_list.size();
-				}
+private:
+	void token(Token const& tok, FontCache &font_cache) {
+		if (tok.tag == TokenTag::Text) {
+			SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
+
+			auto words = split(tok.data, " \r\n\t");
+			for (auto const &w : words) {
+				word(w, font);
 			}
-
-			auto pos = StringPosition {
-				.x = cursor_x,
-				.y = cursor_y,
-				.string = word,
-			};
-			display_list.push_back(pos);
-			if (cursor_y + VSTEP > must_render_up_to_y) {
-				must_render_up_to_y = cursor_y + VSTEP;
+		} else if (tok.tag == TokenTag::Tag) {
+			if (tok.data == "i") {
+				m_is_italic = true;
+			} else if (tok.data == "/i") {
+				m_is_italic = false;
+			} else if (tok.data == "b") {
+				m_is_bold = true;
+			} else if (tok.data == "/b") {
+				m_is_bold = false;
+			} else if (tok.data == "small") {
+				m_size -= 2;
+			} else if (tok.data == "/small") {
+				m_size += 2;
+			} else if (tok.data == "big") {
+				m_size += 4;
+			} else if (tok.data == "/big") {
+				m_size -= 4;
+			} else if (tok.data == "br") {
+				flush();
+			} else if (tok.data == "/p") {
+				flush();
+				m_cursor_y += VSTEP;
+			} else {
+				// do nothing
 			}
-
-			// todo: other text encodings
-			cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
-		}
-
-		// todo: adjust
-		cursor_y += font.getSpacing() * 1.5;
-		cursor_x = HSTEP;
-		if (right_align) {
-			align_to_right(display_list, current_line_start_index, width);
-			current_line_start_index = display_list.size();
+		} else {
+			assert(false && "unreachable");
 		}
 	}
 
-	if (right_align) {
-		align_to_right(display_list, current_line_start_index, width);
+	void word(std::string const &word, SkFont &font) {
+		// todo: other text encodings
+		auto w = font.measureText(word.c_str(), word.size(), SkTextEncoding::kUTF8);
+
+		if (m_cursor_x + w >= m_width - HSTEP) {
+			flush();
+		}
+
+		auto pos = StringPosition {
+			.x = m_cursor_x,
+			.y = -1, // filled in during `flush`
+			.string = word,
+			.font = font,
+		};
+		m_line.push_back(pos);
+
+		// todo: other text encodings
+		m_cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
 	}
 
-	return {
-		.display_list = display_list,
-		.must_render_up_to_y = must_render_up_to_y,
-	};
-}
+	void flush() {
+		if (m_line.empty()) {
+			return;
+		}
+
+		// todo: cool function for this?
+		std::vector<SkFontMetrics> metrics;
+		for (auto const& pos : m_line) {
+			SkFontMetrics m;
+			pos.font.getMetrics(&m);
+			metrics.push_back(m);
+		}
+		// todo: cool function for this!
+		// ascent in skia is typically a negative number, but for Tk it's positive...
+		float max_ascent = -100000;
+		for (auto const& m : metrics) {
+			if (-m.fAscent > max_ascent) {
+				max_ascent = -m.fAscent;
+			}
+		}
+		// todo: metrics.fLeading
+		float baseline = m_cursor_y + max_ascent * 1.25;
+
+		// todo: zip?
+		for (size_t i = 0; i < m_line.size(); i++) {
+			// apparently, Skia draws text from the baseline, not from the NW
+			m_line[i].y = baseline;// + metrics[i].fAscent;
+		}
+
+		if (m_right_align) {
+			float gap = (float) m_width - m_line[m_line.size() - 1].x - (float) HSTEP;
+
+			for (auto &pos : m_line) {
+				pos.x += gap;
+			}
+		}
+
+		for (auto pos : m_line) {
+			m_display_list.push_back(std::move(pos));
+		}
+
+		// todo: cool function for this!
+		float max_descent = -100000;
+		for (auto const& m : metrics) {
+			if (m.fDescent > max_descent) {
+				max_descent = m.fDescent;
+			}
+		}
+
+		// todo: metrics.fLeading
+		m_cursor_y = baseline + max_descent * 1.25;
+		m_cursor_x = HSTEP;
+		m_line = {};
+
+		if (m_cursor_y + VSTEP > m_must_render_up_to_y) {
+			m_must_render_up_to_y = m_cursor_y + VSTEP;
+		}
+	}
+};
 
 void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Texture *&texture, sk_sp<SkSurface> &root_surface, SkImageInfo &info) {
 	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, width, height);
@@ -951,9 +1130,10 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
-	SkFont m_font;
-	std::string m_text;
-	Layout m_layout;
+	std::vector<Token> m_tokens;
+	ComputedLayout m_layout;
+	FontCache m_font_cache;
+
 	int m_scroll = 0;
 	int m_width = INITIAL_WIDTH;
 	int m_height = INITIAL_HEIGHT;
@@ -977,20 +1157,34 @@ public:
 		sk_sp<SkSurface> root_surface;
 		initialize_texture(renderer, INITIAL_WIDTH, INITIAL_HEIGHT, texture, root_surface, info);
 
+		// this doesn't ever want to seem to work so full paths it is
 		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
 		assert(font_mgr);
+		sk_sp<SkTypeface> normal      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman.ttf");
+		sk_sp<SkTypeface> bold        = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Bold.ttf");
+		sk_sp<SkTypeface> italic      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Italic.ttf");
+		sk_sp<SkTypeface> bold_italic = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Bold Italic.ttf");
+		assert(normal);
+		assert(bold);
+		assert(italic);
+		assert(bold_italic);
 
-		sk_sp<SkTypeface> typeface = font_mgr->matchFamilyStyle("Arial", SkFontStyle());
-		assert(typeface);
-		SkFont font(typeface, 16);
+		FontType times_new_roman = FontType {
+			.normal = normal,
+			.bold = bold,
+			.italic = italic,
+			.bold_italic = bold_italic,
+		};
 
-		return Browser(window, renderer, texture, root_surface, info, font_mgr, font);
+		FontCache font_cache = FontCache(times_new_roman);
+
+		return Browser(window, renderer, texture, root_surface, info, font_mgr, font_cache);
 	}
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
-		m_text = lex(body);
-		m_layout = layout(m_text, m_font, m_width, m_right_align);
+		m_tokens = lex(body);
+		m_layout = Layout(m_tokens, m_font_cache, m_width, m_right_align).computed();
 		draw();
 	}
 	
@@ -1006,7 +1200,7 @@ public:
 			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
 			if (cpos.y > m_scroll + m_height + VSTEP) continue;
 			if (cpos.y + VSTEP < m_scroll) continue;
-			canvas->drawString(cpos.string.c_str(), cpos.x, cpos.y - m_scroll, m_font, paint);
+			canvas->drawString(cpos.string.c_str(), cpos.x, cpos.y - m_scroll, cpos.font, paint);
 		}
 
 		// scrollbar
@@ -1043,7 +1237,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = layout(m_text, m_font, m_width, m_right_align);
+		m_layout = Layout(m_tokens, m_font_cache, m_width, m_right_align).computed();
 		draw();
 	}
 
@@ -1081,7 +1275,7 @@ private:
 		sk_sp<SkSurface> root_surface,
 		SkImageInfo surface_info,
 		sk_sp<SkFontMgr> font_mgr,
-		SkFont font
+		FontCache font_cache
 	)
 		: m_window(window)
 		, m_renderer(renderer)
@@ -1089,8 +1283,8 @@ private:
 		, m_root_surface(root_surface)
 		, m_surface_info(surface_info)
 		, m_font_mgr(font_mgr)
-		, m_font(font)
 		, m_layout()
+		, m_font_cache(font_cache)
 	{}
 };
 
