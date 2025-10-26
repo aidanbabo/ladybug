@@ -685,7 +685,7 @@ struct CachedHttpResponse {
 // Some URLs don't need a ConnectionManager at all! Should we allow them to get their contents without access to a ConnectionManager?
 class ConnectionManager {
 	// todo: default ctor and dtor? handle this (and the HttpConnections) correctly?
-	std::unordered_map<URL, HttpConnection *> m_active_connections;
+	std::unordered_map<URL, std::unique_ptr<HttpConnection>> m_active_connections;
 	// todo: retest that this works
 	std::unordered_map<URL, CachedHttpResponse> m_cached_responses;
 
@@ -716,8 +716,8 @@ public:
 	}
 
 	void print_active_connections() const {
-		for (auto p : m_active_connections) {
-			std::cerr << p.first.to_string() << ": " << p.second << std::endl;
+		for (auto const& p : m_active_connections) {
+			std::cerr << p.first.to_string() << std::endl;
 		}
 	}
 
@@ -814,13 +814,13 @@ private:
 					} else {
 						assert(false);
 					}
-					HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
-					m_active_connections.insert({reusable_base, connection});
-					HttpConnection *conn = m_active_connections[reusable_base];
+					auto connection = std::make_unique<HttpConnection>(url.host.c_str(), url.port, encrypted);
+					m_active_connections.insert({reusable_base, std::move(connection)});
+					HttpConnection *conn = m_active_connections[reusable_base].get();
 					return conn;
 				} else {
 					std::cerr << "Reusing connection for " << reusable_base.to_string() << std::endl;
-					return pair->second;
+					return pair->second.get();
 				}
 			}();
 
