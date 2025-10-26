@@ -87,6 +87,23 @@ std::vector<std::string> split(std::string s, std::string const& delimiter, int 
 	}
 }
 
+std::vector<std::string> split_on_any(std::string s, std::string const& delimiters, int nsplits = -1) {
+	std::vector<std::string> items;
+	size_t start = 0;
+	for (;;) {
+		size_t end_pos = s.find_first_of(delimiters, start);
+		if (end_pos == std::string::npos || (int) items.size() == nsplits) {
+			std::string item = s.substr(start);
+			items.push_back(item);
+			return items;
+		}
+
+		std::string item = s.substr(start, end_pos - start);
+		items.push_back(item);
+		start = end_pos + 1;
+	}
+}
+
 struct URL {
 	bool view_source;
 	std::string scheme;
@@ -879,6 +896,7 @@ struct Token {
 	std::string data;
 };
 
+// todo: handle nesting tags...
 std::vector<Token> lex(std::string_view body) {
 	std::vector<Token> out;
 	std::string buffer;
@@ -1036,9 +1054,12 @@ private:
 		if (tok.tag == TokenTag::Text) {
 			SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
 
-			auto words = split(tok.data, " \r\n\t");
+			auto words = split_on_any(tok.data, " \r\n\t");
 			for (auto const &w : words) {
-				word(w, font);
+				auto w2 = trim_whitespace(w);
+				if (w2 != "") {
+					word(w2, font);
+				}
 			}
 		} else if (tok.tag == TokenTag::Tag) {
 			if (tok.data == "i") {
@@ -1381,6 +1402,8 @@ int main(int argc, char** argv) {
 				}
 			}
 		}
+
+		SDL_Delay(16);
 	}
 
 	browser.destroy();
