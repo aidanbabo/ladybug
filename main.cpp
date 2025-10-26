@@ -205,17 +205,53 @@ struct URL {
 		};
 	}
 
-	std::string base() const {
-		return scheme + "://" + host + ":" + std::to_string(port);
+	bool operator==(const URL& other) const noexcept {
+		return view_source == other.view_source && scheme == other.scheme && host == other.host && port == other.port && path == other.path;
 	}
 
-	std::string cachable_subsection() const {
-		return scheme + "://" + host + ":" + std::to_string(port) + path;
+	// todo: special hash and eq impls for this?
+	URL reusable_connection_subsection() const {
+		return URL {
+			.view_source = false,
+			.scheme = scheme,
+			.host = host,
+			.port = port,
+			.path = "",
+		};
+	}
+
+	// todo: special hash and eq impls for this?
+	URL cachable_subsection() const {
+		return URL {
+			.view_source = false,
+			.scheme = scheme,
+			.host = host,
+			.port = port,
+			.path = path,
+		};
 	}
 
 	std::string to_string() const {
-		// todo: add view-source?
-		return scheme + "://" + host + ":" + std::to_string(port) + path;
+		std::string source = (view_source) ? "view-source:" : "";
+		return source + scheme + "://" + host + ":" + std::to_string(port) + path;
+	}
+};
+
+// from Boost
+void combine_hash(size_t &seed, size_t value) {
+	seed ^= (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+}
+
+template <>
+struct std::hash<URL> {
+	std::size_t operator()(const URL& u) const noexcept {
+		size_t seed = 0;
+		combine_hash(seed, std::hash<size_t>{}(u.view_source));
+		combine_hash(seed, std::hash<std::string>{}(u.scheme));
+		combine_hash(seed, std::hash<std::string>{}(u.host));
+		combine_hash(seed, std::hash<uint16_t>{}(u.port));
+		combine_hash(seed, std::hash<std::string>{}(u.path));
+		return seed;
 	}
 };
 
@@ -648,10 +684,10 @@ struct CachedHttpResponse {
 
 // Some URLs don't need a ConnectionManager at all! Should we allow them to get their contents without access to a ConnectionManager?
 class ConnectionManager {
-	// default ctor and dtor? handle this (and the HttpConnections) correctly?
-	std::unordered_map<std::string, HttpConnection *> m_active_connections;
-	// GAHHHH MAKING THINGS Hash SUCKS
-	std::unordered_map<std::string, CachedHttpResponse> m_cached_responses;
+	// todo: default ctor and dtor? handle this (and the HttpConnections) correctly?
+	std::unordered_map<URL, HttpConnection *> m_active_connections;
+	// todo: retest that this works
+	std::unordered_map<URL, CachedHttpResponse> m_cached_responses;
 
 public:
 	std::string request(URL url) {
@@ -681,7 +717,7 @@ public:
 
 	void print_active_connections() const {
 		for (auto p : m_active_connections) {
-			std::cerr << p.first << ": " << p.second << std::endl;
+			std::cerr << p.first.to_string() << ": " << p.second << std::endl;
 		}
 	}
 
@@ -700,16 +736,18 @@ private:
 	}
 
 	std::string load_from_cache_or_fetch(URL url) {
-		std::string cachable_url = url.cachable_subsection();
+		// todo: custom hash impl? is this even worth?
+		URL cachable_url = url.cachable_subsection();
 		if (auto cached = m_cached_responses.find(cachable_url); cached != m_cached_responses.end()) {
 			std::time_t now = std::time(nullptr);
 			if (now >= cached->second.expires_at) {
 				m_cached_responses.erase(cached);
 			} else {
-				std::cerr << "Using cached response for " << cachable_url << std::endl;
+				std::cerr << "Using cached response for " << cachable_url.to_string() << std::endl;
 				return cached->second.response.body;
 			}
 		}
+		// todo: move caching to after this step?
 		return request_http(url);
 	}
 
@@ -749,7 +787,7 @@ private:
 
 			std::time_t expires_at = std::time(nullptr) + max_age - age;
 
-			std::string cachable_url = url.cachable_subsection();
+			URL cachable_url = url.cachable_subsection();
 			CachedHttpResponse cachable_response = {
 				.response = response,
 				.expires_at = expires_at,
@@ -761,13 +799,13 @@ private:
 	std::string request_http(URL url) {
 		// redirect loop
 		for (int i = 0; i < 10; i++) {
-			std::string base = url.base();
-			auto pair = m_active_connections.find(base);
+			URL reusable_base = url.reusable_connection_subsection();
+			auto pair = m_active_connections.find(reusable_base);
 
 			// I wish if statements were expressions so bad
 			HttpConnection *connection = [&] {
 				if (pair == m_active_connections.end()) {
-					std::cerr << "Creating new connection for " << base << std::endl;
+					std::cerr << "Creating new connection for " << reusable_base.to_string() << std::endl;
 					bool encrypted;
 					if (url.scheme == "http") {
 						encrypted = false;
@@ -777,11 +815,11 @@ private:
 						assert(false);
 					}
 					HttpConnection *connection = new HttpConnection(url.host.c_str(), url.port, encrypted);
-					m_active_connections.insert({base, connection});
-					HttpConnection *conn = m_active_connections[base];
+					m_active_connections.insert({reusable_base, connection});
+					HttpConnection *conn = m_active_connections[reusable_base];
 					return conn;
 				} else {
-					std::cerr << "Reusing connection for " << base << std::endl;
+					std::cerr << "Reusing connection for " << reusable_base.to_string() << std::endl;
 					return pair->second;
 				}
 			}();
@@ -914,12 +952,12 @@ struct FontInfo {
 
 template <>
 struct std::hash<FontInfo> {
-	std::size_t operator()(const FontInfo& f) const noexcept {
-		std::size_t h1 = std::hash<size_t>{}(f.size);
-		std::size_t h2 = std::hash<bool>{}(f.bold);
-		std::size_t h3 = std::hash<bool>{}(f.italic);
-		// todo: this sucks
-		return (h1 << 2) ^ (h2 << 1) ^ h3;
+	size_t operator()(const FontInfo& f) const noexcept {
+		size_t seed = 0;
+		combine_hash(seed, std::hash<size_t>{}(f.size));
+		combine_hash(seed, std::hash<bool>{}(f.bold));
+		combine_hash(seed, std::hash<bool>{}(f.italic));
+		return seed;
 	}
 };
 
