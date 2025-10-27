@@ -940,10 +940,12 @@ std::vector<Token> lex(std::string_view body) {
 
 struct StringPosition {
 	float x, y;
+	float width;
 	// todo: support unicode
 	std::string string;
 	// todo: is copying this around cheap?
 	SkFont font;
+	bool is_super_text;
 };
 
 struct ComputedLayout {
@@ -1024,6 +1026,7 @@ class Layout {
 	bool m_is_bold = false;
 	bool m_is_italic = false;
 	bool m_in_title = false;
+	bool m_in_sup = false;
 	int m_size = 12;
 	// positions will have useless y coordinates
 	std::vector<StringPosition> m_line;
@@ -1053,8 +1056,8 @@ public:
 private:
 	void token(Token const& tok, FontCache &font_cache) {
 		if (tok.tag == TokenTag::Text) {
-			SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
 
+			SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
 			auto words = split_on_any(tok.data, " \r\n\t");
 			for (auto const &w : words) {
 				auto w2 = trim_whitespace(w);
@@ -1091,6 +1094,13 @@ private:
 			} else if (tok.data == "/h1") {
 				flush();
 				m_in_title = false;
+			} else if (tok.data == "sup") {
+				m_in_sup = true;
+				// todo: halving text looks stupid, but it is probably an ascent related issue 
+				m_size -= 2;
+			} else if (tok.data == "/sup") {
+				m_in_sup = false;
+				m_size += 2;
 			} else {
 				// do nothing
 			}
@@ -1110,8 +1120,10 @@ private:
 		auto pos = StringPosition {
 			.x = m_cursor_x,
 			.y = -1, // filled in during `flush`
+			.width = w,
 			.string = word,
 			.font = font,
+			.is_super_text = m_in_sup,
 		};
 		m_line.push_back(pos);
 
@@ -1144,15 +1156,18 @@ private:
 
 		// todo: zip?
 		for (size_t i = 0; i < m_line.size(); i++) {
-			// apparently, Skia draws text from the baseline, not from the NW
-			m_line[i].y = baseline;// + metrics[i].fAscent;
+			if (m_line[i].is_super_text) {
+				m_line[i].y = baseline - max_ascent / 2;
+			} else {
+				// apparently, Skia draws text from the baseline, not from the NW
+				m_line[i].y = baseline;
+			}
 		}
 
 		if (m_in_title || m_right_align) {
 			auto const& w = m_line[m_line.size() - 1];
 			// todo: put in StringPosition?
-			auto word_width = w.font.measureText(w.string.c_str(), w.string.size(), SkTextEncoding::kUTF8);
-			float right_side_gap = (float) m_width - w.x - word_width - (float) HSTEP;
+			float right_side_gap = (float) m_width - w.x - w.width - (float) HSTEP;
 
 			float change = (m_in_title) ? right_side_gap / 2 : right_side_gap;
 			for (auto &pos : m_line) {
