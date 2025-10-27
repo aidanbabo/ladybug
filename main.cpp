@@ -1023,6 +1023,7 @@ class Layout {
 	float m_must_render_up_to_y = VSTEP;
 	bool m_is_bold = false;
 	bool m_is_italic = false;
+	bool m_in_title = false;
 	int m_size = 12;
 	// positions will have useless y coordinates
 	std::vector<StringPosition> m_line;
@@ -1083,6 +1084,13 @@ private:
 			} else if (tok.data == "/p") {
 				flush();
 				m_cursor_y += VSTEP;
+			// todo: remove. this is non-standard
+			} else if (tok.data == "h1 class=\"title\"") {
+				flush();
+				m_in_title = true;
+			} else if (tok.data == "/h1") {
+				flush();
+				m_in_title = false;
 			} else {
 				// do nothing
 			}
@@ -1140,11 +1148,15 @@ private:
 			m_line[i].y = baseline;// + metrics[i].fAscent;
 		}
 
-		if (m_right_align) {
-			float gap = (float) m_width - m_line[m_line.size() - 1].x - (float) HSTEP;
+		if (m_in_title || m_right_align) {
+			auto const& w = m_line[m_line.size() - 1];
+			// todo: put in StringPosition?
+			auto word_width = w.font.measureText(w.string.c_str(), w.string.size(), SkTextEncoding::kUTF8);
+			float right_side_gap = (float) m_width - w.x - word_width - (float) HSTEP;
 
+			float change = (m_in_title) ? right_side_gap / 2 : right_side_gap;
 			for (auto &pos : m_line) {
-				pos.x += gap;
+				pos.x += change;
 			}
 		}
 
