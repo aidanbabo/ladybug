@@ -35,6 +35,7 @@
 #include <array>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -862,28 +863,27 @@ private:
 	}
 };
 
+char const* SOFT_HYPHEN = "­";
+
 // lowkey hate implicit mutable references, but pairs also suck...
-char unescape_sequence(std::string_view body, size_t &i) {
-	assert(i + 2 < body.length());
-	char c2 = body[i];
-	char c3 = body[i + 1];
-	char c4 = body[i + 2];
-	if (c2 == 'l' && c3 == 't' && c4 == ';') {
+void unescape_sequence(std::string_view body, size_t &i, std::string &out) {
+	// todo: allow semicolons or no semicolons
+	// todo: trie?, at least use an array of pairs if this gets too long
+	if (body.compare(i, 3, "lt;") == 0) {
 		i += 3;
-		return '<';
-	} else if (c2 == 'g' && c3 == 't' && c4 == ';') {
+		out.push_back('<');
+	} else if (body.compare(i, 3, "gt;") == 0) {
 		i += 3;
-		return '>';
+		out.push_back('>');
+	} else if (body.compare(i, 4, "amp;") == 0) {
+		i += 4;
+		out.push_back('&');
+	} else if (body.compare(i, 3, "shy") == 0) {
+		i += 3;
+		out += SOFT_HYPHEN;
 	} else {
-		assert(i + 3 < body.length());
-		char c5 = body[i + 3];
-		if (c2 == 'a' && c3 == 'm' && c4 == 'p' && c5 == ';') {
-			i += 4;
-			return '&';
-		}
+		out.push_back('&');
 	}
-	i += 1;
-	return '&';
 }
 
 enum class TokenTag {
@@ -923,7 +923,7 @@ std::vector<Token> lex(std::string_view body) {
 				buffer = "";
 			}
 		} else if (!in_tag && c == '&') {
-			buffer.push_back(unescape_sequence(body, i));
+			unescape_sequence(body, i, buffer);
 		} else { 
 			buffer.push_back(c);
 		}
@@ -1109,26 +1109,67 @@ private:
 		}
 	}
 
+	// todo: cleanup with fresh eyes
 	void word(std::string const &word, SkFont &font) {
-		// todo: other text encodings
-		auto w = font.measureText(word.c_str(), word.size(), SkTextEncoding::kUTF8);
+		// The algorithm is to split a word into its separable parts and to try and render all of the parts at once.
+		// If this fails we remove the last separable part and try again.
+		//   We keep track of these parts to be rendered later (on a new line).
+		// If we have no separable parts then we need to flush and start over.
+		std::vector<std::string> soft_hyphen_split = split(word, SOFT_HYPHEN);
+		std::vector<std::string> hyphens_to_render_later;
 
-		if (m_cursor_x + w >= m_width - HSTEP) {
-			flush();
+		size_t failthrough;
+		size_t const MAX_FAILTHROUGH = 1000;
+		for (
+			failthrough = 0;
+			!soft_hyphen_split.empty() && failthrough < MAX_FAILTHROUGH;
+			failthrough++
+		) {
+			std::string word_to_render = std::accumulate(soft_hyphen_split.begin(), soft_hyphen_split.end(), std::string(""), [](std::string a, std::string b) { return a + b; });
+			if (!hyphens_to_render_later.empty()) {
+				word_to_render += "-";
+			}
+			auto text_width_max = m_width - HSTEP - m_cursor_x;
+			auto w = font.measureText(word_to_render.c_str(), word_to_render.size(), SkTextEncoding::kUTF8);
+
+			if (w < text_width_max || (m_cursor_x == HSTEP && soft_hyphen_split.size() == 1)) {
+				// If the word fits or will never fit at the current resolution we render it!
+				auto pos = StringPosition {
+					.x = m_cursor_x,
+					.y = -1, // filled in during `flush`
+					.width = w,
+					.string = word_to_render,
+					.font = font,
+					.is_super_text = m_in_sup,
+				};
+				m_line.push_back(pos);
+
+				// todo: other text encodings
+				m_cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
+
+				// Optimization: If there is more work, it is because this line is full, so we must flush anyway!
+				// This prevents us from trying to split the remaining string over and over when none of it will fit.
+				if (!hyphens_to_render_later.empty()) {
+					flush();
+				}
+				// When there are no leftovers here we will exit the loop.
+				soft_hyphen_split = hyphens_to_render_later;
+				hyphens_to_render_later = {};
+			} else if (soft_hyphen_split.size() > 1) {
+				// We can split the text based on hyphens, so we do so, noting we have to come back to the extras later.
+				std::string v = *soft_hyphen_split.erase(soft_hyphen_split.end() - 1);
+				hyphens_to_render_later.insert(hyphens_to_render_later.begin(), v);
+			} else {
+				// The word didn't fit and we couldn't split it, so we flush and try the next line.
+				flush();
+				soft_hyphen_split.insert(soft_hyphen_split.end(), hyphens_to_render_later.begin(), hyphens_to_render_later.end());
+				hyphens_to_render_later = {};
+			}
 		}
 
-		auto pos = StringPosition {
-			.x = m_cursor_x,
-			.y = -1, // filled in during `flush`
-			.width = w,
-			.string = word,
-			.font = font,
-			.is_super_text = m_in_sup,
-		};
-		m_line.push_back(pos);
-
-		// todo: other text encodings
-		m_cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
+		if (failthrough == MAX_FAILTHROUGH) {
+			std::cerr << "Failed to render text: " << word << std::endl;
+		}
 	}
 
 	void flush() {
@@ -1324,26 +1365,31 @@ public:
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
 		m_layout = Layout(m_tokens, m_font_cache, m_width, m_right_align).computed();
+		// todo: do one better, make the scroll proportional to the new screen size
+		// either by making m_scroll a float, or by recalculating it on resize.
+		clamp_scroll();
 		draw();
+	}
+
+	void clamp_scroll() {
+		if (m_scroll < 0) {
+			m_scroll = 0;
+		}
+		int max_scroll = m_layout.must_render_up_to_y - m_height;
+		if (m_scroll > max_scroll) {
+			m_scroll = max_scroll;
+		}
 	}
 
 	void scroll_up() {
 		m_scroll -= SCROLL_STEP;
-		if (m_scroll < 0) {
-			m_scroll = 0;
-		}
+		clamp_scroll();
 		draw();
 	}
 
 	void scroll_down() {
 		m_scroll += SCROLL_STEP;
-		int max_scroll = m_layout.must_render_up_to_y - m_height;
-		if (max_scroll < 0) {
-			max_scroll = 0;
-		}
-		if (m_scroll > max_scroll) {
-			m_scroll = max_scroll;
-		}
+		clamp_scroll();
 		draw();
 	}
 
