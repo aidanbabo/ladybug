@@ -27,7 +27,7 @@ struct std::hash<URL> {
 	std::size_t operator()(const URL& u) const noexcept;
 };
 
-struct HttpConnection;
+class HttpConnection;
 struct HttpResponse;
 struct CachedHttpResponse;
 

@@ -83,11 +83,11 @@ class Layout {
 	bool m_right_align;
 
 public:
-	Layout(std::vector<Token> tokens, FontCache &font_cache, int width, bool right_align);
+	Layout(std::vector<Token> const& tokens, FontCache& font_cache, int width, bool right_align);
 	ComputedLayout computed() const;
 
 private:
-	void token(Token const& tok, FontCache &font_cache);
-	void word(std::string const &word, SkFont &font);
+	void token(Token const& tok, FontCache& font_cache);
+	void word(std::string_view word, SkFont& font);
 	void flush();
 };

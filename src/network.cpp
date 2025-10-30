@@ -27,7 +27,7 @@ void network_init() {
 	OpenSSL_add_all_algorithms();
 }
 
-static std::string escape(std::string source) {
+static std::string escape(std::string_view source) {
 	std::string output;
 	for (char c : source) {
 		if (c == '&') {
@@ -181,7 +181,7 @@ URL URL::cachable_subsection() const {
 }
 
 std::string URL::to_string() const {
-	std::string source = (view_source) ? "view-source:" : "";
+	const char *source = (view_source) ? "view-source:" : "";
 	return source + scheme + "://" + host + ":" + std::to_string(port) + path;
 }
 
@@ -308,7 +308,9 @@ public:
 	HttpResponse request(URL url) {
 		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
-		std::vector<std::pair<std::string, std::string>> request_headers;
+		// todo: idk why i can't make the second paramter a string_view as well...
+		// maybe it's make_pair? it doesn't do the conversion well? idk
+		std::vector<std::pair<std::string_view, std::string>> request_headers;
 		request_headers.push_back(std::make_pair("Host", url.host));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
@@ -366,7 +368,7 @@ public:
 					assert(status.size() == 3);
 
 					response.version = status[0];
-					response.status = std::stoi(status[1]);
+					response.status = std::stoi(std::string{status[1]});
 					response.explanation = status[2];
 
 					parsing_state = PARSING_HEADERS;
@@ -378,12 +380,12 @@ public:
 						auto header_split = split(line, ":", 1);
 						assert(header_split.size() == 2);
 
-						std::string header_name = header_split[0];
-						std::string header_value = header_split[1];
+						std::string header_name { header_split[0] };
+						std::string_view header_value = header_split[1];
 						std::transform(header_name.begin(), header_name.end(), header_name.begin(), ::tolower);
 
 						header_value = trim_whitespace(header_value);
-						response.headers.insert({header_name, header_value});
+						response.headers.insert({header_name, std::string{header_value}});
 					}
 				} else {
 					assert(false);
@@ -417,9 +419,9 @@ public:
 
 		bool chunked_transfer = false;
 		if (auto transfer_encoding = response.headers.find("transfer-encoding"); transfer_encoding != response.headers.end()) {
-			auto s = split(transfer_encoding->second, ",");
+			std::vector<std::string_view> s = split(transfer_encoding->second, ",");
 			for (auto v : s) {
-				std::string value = trim_whitespace(v);
+				std::string_view value = trim_whitespace(v);
 				if (value == "gzip") {
 					decompress = true;
 				} else if (value == "deflate") {
@@ -696,9 +698,9 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 		return;
 	}
 
-	std::vector<std::string> directives = split(ctrl_header->second, ",");
-	for (std::string d : directives) {
-		std::string directive = trim_whitespace(d);
+	std::vector<std::string_view> directives = split(ctrl_header->second, ",");
+	for (auto d : directives) {
+		std::string_view directive = trim_whitespace(d);
 
 		if (directive == "no-store") {
 			std::cerr << "No store for " << url.to_string() << std::endl;
@@ -712,7 +714,8 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 		}
 
 		// this function throws on failure :(
-		uint64_t max_age = std::stol(directive.substr(header_start.length()));
+		// todo: no std::string
+		uint64_t max_age = std::stol(std::string{directive.substr(header_start.length())});
 
 		uint64_t age = 0;
 		if (auto age_finder = response.headers.find("age"); age_finder != response.headers.end()) {

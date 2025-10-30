@@ -1,4 +1,6 @@
-// todo: Exercise 2-5: Emoji
+// todo: Exercise 2-5: Emoji -> done with text stuff for now
+// todo: Exercise 3-4: Small caps -> done with text stuff for now
+// todo: Exercise 3-5: Small caps -> done with text stuff for now
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -9,7 +11,6 @@
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkRect.h"
-#include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
 
 #include "include/core/SkFontMgr.h"
@@ -24,15 +25,8 @@
 #include <cstdlib>
 #include <ctime>
 
-#include <algorithm>
-#include <array>
-#include <iostream>
-#include <memory>
-#include <numeric>
-#include <fstream>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 int const INITIAL_WIDTH  = 800;
@@ -145,7 +139,6 @@ public:
 
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
 
-		// todo: change to m_row_bytes
 		size_t row_bytes = m_width * 4;
 
 		std::vector<uint8_t> pixels(m_height * m_width * 4);

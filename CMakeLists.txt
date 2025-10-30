@@ -18,4 +18,4 @@ target_link_libraries(ladybug PRIVATE harfbuzz::harfbuzz)
 target_link_libraries(ladybug PRIVATE SDL3::SDL3)
 target_link_libraries(ladybug PRIVATE unofficial::skia::skia)
 
-target_compile_options(ladybug PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(ladybug PRIVATE -g -Wall -Wextra -Wpedantic)

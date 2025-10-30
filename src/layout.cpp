@@ -6,35 +6,35 @@
 
 #include <cassert>
 
+#include <array>
 #include <iostream>
 #include <numeric>
+#include <ranges>
 
-
-// lowkey hate implicit mutable references, but pairs also suck...
 void unescape_sequence(std::string_view body, size_t &i, std::string &out) {
 	// todo: allow semicolons or no semicolons
-	// todo: trie?, at least use an array of pairs if this gets too long
-	if (body.compare(i, 3, "lt;") == 0) {
-		i += 3;
-		out.push_back('<');
-	} else if (body.compare(i, 3, "gt;") == 0) {
-		i += 3;
-		out.push_back('>');
-	} else if (body.compare(i, 4, "amp;") == 0) {
-		i += 4;
-		out.push_back('&');
-	} else if (body.compare(i, 5, "quot;") == 0) {
-		i += 5;
-		out.push_back('"');
-	} else if (body.compare(i, 3, "shy") == 0) {
-		i += 3;
-		out += SOFT_HYPHEN;
-	} else {
-		out.push_back('&');
+	struct EscapeSequence {
+		std::string_view sequence;
+		std::string_view replacement;
+	};
+	constexpr std::array escapes = std::to_array<EscapeSequence>({
+		{"lt;", "<"},
+		{"gt;", ">"},
+		{"amp;", "&"},
+		{"quot;", "\""},
+		{"shy", SOFT_HYPHEN},
+	});
+	for (auto escape : escapes) {
+		if (body.compare(i, escape.sequence.size(), escape.sequence) == 0) {
+			i += escape.sequence.size();
+			out += escape.replacement;
+			return;
+		}
 	}
+	out.push_back('&');
 }
 
-// todo: handle nesting tags...
+// todo: Chapter 4 (an actual tree)
 std::vector<Token> lex(std::string_view body) {
 	std::vector<Token> out;
 	std::string buffer;
@@ -118,8 +118,9 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 	return m_fonts[info];
 }
 
-// this approach is odd...
-Layout::Layout(std::vector<Token> tokens, FontCache &font_cache, int width, bool right_align) {
+// Class based approach is super OO, but it's fine.
+// I guess I would just use a struct and not make them member functions... sooo... nbd
+Layout::Layout(std::vector<Token> const& tokens, FontCache& font_cache, int width, bool right_align) {
 	m_width = width;
 	m_right_align = right_align;
 
@@ -137,15 +138,14 @@ ComputedLayout Layout::computed() const {
 	};
 }
 
-void Layout::token(Token const& tok, FontCache &font_cache) {
+void Layout::token(Token const& tok, FontCache& font_cache) {
 	if (tok.tag == TokenTag::Text) {
-
 		SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
-		auto words = split_on_any(tok.data, " \r\n\t");
-		for (auto const &w : words) {
-			auto w2 = trim_whitespace(w);
-			if (w2 != "") {
-				word(w2, font);
+		std::vector<std::string_view> words = split_on_any(tok.data, " \r\n\t");
+		for (auto w : words) {
+			w = trim_whitespace(w);
+			if (w != "") {
+				word(w, font);
 			}
 		}
 	} else if (tok.tag == TokenTag::Tag) {
@@ -192,14 +192,13 @@ void Layout::token(Token const& tok, FontCache &font_cache) {
 	}
 }
 
-// todo: cleanup with fresh eyes
-void Layout::word(std::string const &word, SkFont &font) {
+void Layout::word(std::string_view word, SkFont& font) {
 	// The algorithm is to split a word into its separable parts and to try and render all of the parts at once.
 	// If this fails we remove the last separable part and try again.
 	//   We keep track of these parts to be rendered later (on a new line).
 	// If we have no separable parts then we need to flush and start over.
-	std::vector<std::string> soft_hyphen_split = split(word, SOFT_HYPHEN);
-	std::vector<std::string> hyphens_to_render_later;
+	std::vector<std::string_view> soft_hyphen_split = split(word, SOFT_HYPHEN);
+	std::vector<std::string_view> hyphens_to_render_later;
 
 	size_t failthrough;
 	size_t const MAX_FAILTHROUGH = 1000;
@@ -208,7 +207,10 @@ void Layout::word(std::string const &word, SkFont &font) {
 		!soft_hyphen_split.empty() && failthrough < MAX_FAILTHROUGH;
 		failthrough++
 	) {
-		std::string word_to_render = std::accumulate(soft_hyphen_split.begin(), soft_hyphen_split.end(), std::string(""), [](std::string a, std::string b) { return a + b; });
+		std::string word_to_render;
+		for (auto w : soft_hyphen_split) {
+			word_to_render += w;
+		}
 		if (!hyphens_to_render_later.empty()) {
 			word_to_render += "-";
 		}
@@ -221,7 +223,7 @@ void Layout::word(std::string const &word, SkFont &font) {
 				.x = m_cursor_x,
 				.y = -1, // filled in during `flush`
 				.width = w,
-				.string = word_to_render,
+				.string = std::move(word_to_render),
 				.font = font,
 				.is_super_text = m_in_sup,
 			};
@@ -240,7 +242,7 @@ void Layout::word(std::string const &word, SkFont &font) {
 			hyphens_to_render_later = {};
 		} else if (soft_hyphen_split.size() > 1) {
 			// We can split the text based on hyphens, so we do so, noting we have to come back to the extras later.
-			std::string v = *soft_hyphen_split.erase(soft_hyphen_split.end() - 1);
+			std::string_view v = *soft_hyphen_split.erase(soft_hyphen_split.end() - 1);
 			hyphens_to_render_later.insert(hyphens_to_render_later.begin(), v);
 		} else {
 			// The word didn't fit and we couldn't split it, so we flush and try the next line.
@@ -260,37 +262,31 @@ void Layout::flush() {
 		return;
 	}
 
-	// todo: cool function for this?
-	std::vector<SkFontMetrics> metrics;
-	for (auto const& pos : m_line) {
+	std::vector<SkFontMetrics> metrics(m_line.size());
+	std::transform(m_line.begin(), m_line.end(), metrics.begin(), [](auto const& pos) {
 		SkFontMetrics m;
 		pos.font.getMetrics(&m);
-		metrics.push_back(m);
-	}
-	// todo: cool function for this!
+		return m;
+	});
+
+	auto ascents = std::views::transform(metrics, &SkFontMetrics::fAscent);
 	// ascent in skia is typically a negative number, but for Tk it's positive...
-	float max_ascent = -100000;
-	for (auto const& m : metrics) {
-		if (-m.fAscent > max_ascent) {
-			max_ascent = -m.fAscent;
-		}
-	}
+	float max_ascent = -std::ranges::min(ascents);
+
 	// todo: metrics.fLeading
 	float baseline = m_cursor_y + max_ascent * 1.25;
 
-	// todo: zip?
-	for (size_t i = 0; i < m_line.size(); i++) {
-		if (m_line[i].is_super_text) {
-			m_line[i].y = baseline - max_ascent / 2;
+	// Skia draws text from the baseline, not from the NW like Tkinter
+	for (auto & pos : m_line) {
+		if (pos.is_super_text) {
+			pos.y = baseline - max_ascent / 2;
 		} else {
-			// apparently, Skia draws text from the baseline, not from the NW
-			m_line[i].y = baseline;
+			pos.y = baseline;
 		}
 	}
 
 	if (m_in_title || m_right_align) {
-		auto const& w = m_line[m_line.size() - 1];
-		// todo: put in StringPosition?
+		auto const& w = m_line.back();
 		float right_side_gap = (float) m_width - w.x - w.width - (float) HSTEP;
 
 		float change = (m_in_title) ? right_side_gap / 2 : right_side_gap;
@@ -299,24 +295,14 @@ void Layout::flush() {
 		}
 	}
 
-	for (auto pos : m_line) {
-		m_display_list.push_back(std::move(pos));
-	}
-
-	// todo: cool function for this!
-	float max_descent = -100000;
-	for (auto const& m : metrics) {
-		if (m.fDescent > max_descent) {
-			max_descent = m.fDescent;
-		}
-	}
+	auto descents = std::views::transform(metrics, &SkFontMetrics::fDescent);
+	float max_descent = std::ranges::max(descents);
 
 	// todo: metrics.fLeading
 	m_cursor_y = baseline + max_descent * 1.25;
 	m_cursor_x = HSTEP;
+	m_display_list.insert(m_display_list.end(), m_line.begin(), m_line.end());
 	m_line = {};
-
-	if (m_cursor_y + VSTEP > m_must_render_up_to_y) {
-		m_must_render_up_to_y = m_cursor_y + VSTEP;
-	}
+	assert(m_cursor_y + VSTEP >= m_must_render_up_to_y);
+	m_must_render_up_to_y = m_cursor_y + VSTEP;
 }
