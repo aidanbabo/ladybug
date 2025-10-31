@@ -6,75 +6,8 @@
 
 #include <cassert>
 
-#include <array>
 #include <iostream>
-#include <numeric>
 #include <ranges>
-
-void unescape_sequence(std::string_view body, size_t &i, std::string &out) {
-	// todo: allow semicolons or no semicolons
-	struct EscapeSequence {
-		std::string_view sequence;
-		std::string_view replacement;
-	};
-	constexpr std::array escapes = std::to_array<EscapeSequence>({
-		{"lt;", "<"},
-		{"gt;", ">"},
-		{"amp;", "&"},
-		{"quot;", "\""},
-		{"shy", SOFT_HYPHEN},
-	});
-	for (auto escape : escapes) {
-		if (body.compare(i, escape.sequence.size(), escape.sequence) == 0) {
-			i += escape.sequence.size();
-			out += escape.replacement;
-			return;
-		}
-	}
-	out.push_back('&');
-}
-
-// todo: Chapter 4 (an actual tree)
-std::vector<Token> lex(std::string_view body) {
-	std::vector<Token> out;
-	std::string buffer;
-	size_t i = 0;
-	bool in_tag = false;
-	while (i < body.length()) {
-		char c = body[i++];
-		if (c == '<') {
-			in_tag = true;
-			if (!buffer.empty()) {
-				out.push_back(Token {
-					.tag = TokenTag::Text,
-					.data = buffer,
-				});
-				buffer = "";
-			}
-		} else if (c == '>') {
-			in_tag = false;
-			if (!buffer.empty()) {
-				out.push_back(Token {
-					.tag = TokenTag::Tag,
-					.data = buffer,
-				});
-				buffer = "";
-			}
-		} else if (!in_tag && c == '&') {
-			unescape_sequence(body, i, buffer);
-		} else { 
-			buffer.push_back(c);
-		}
-	}
-
-	if (!in_tag && !buffer.empty()) {
-		out.push_back(Token {
-			.tag = TokenTag::Text,
-			.data = buffer,
-		});
-	}
-	return out;
-}
 
 bool FontInfo::operator==(const FontInfo& other) const noexcept {
 	return size == other.size && bold == other.bold && italic == other.italic;
@@ -120,13 +53,11 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 
 // Class based approach is super OO, but it's fine.
 // I guess I would just use a struct and not make them member functions... sooo... nbd
-Layout::Layout(std::vector<Token> const& tokens, FontCache& font_cache, int width, bool right_align) {
+Layout::Layout(Node const& root, FontCache& font_cache, int width, bool right_align) {
 	m_width = width;
 	m_right_align = right_align;
 
-	for (Token const& tok : tokens) {
-		token(tok, font_cache);
-	}
+	recurse(root, font_cache);
 
 	flush();
 }
@@ -138,58 +69,75 @@ ComputedLayout Layout::computed() const {
 	};
 }
 
-void Layout::token(Token const& tok, FontCache& font_cache) {
-	if (tok.tag == TokenTag::Text) {
+void Layout::recurse(Node const& node, FontCache& font_cache) {
+	if (node.type == NodeType::Text) {
+		Text const& text = static_cast<Text const&>(node);
+
 		SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
-		std::vector<std::string_view> words = split_on_any(tok.data, " \r\n\t");
+		std::vector<std::string_view> words = split_on_any(text.text);
 		for (auto w : words) {
 			w = trim_whitespace(w);
 			if (w != "") {
 				word(w, font);
 			}
 		}
-	} else if (tok.tag == TokenTag::Tag) {
-		if (tok.data == "i") {
-			m_is_italic = true;
-		} else if (tok.data == "/i") {
-			m_is_italic = false;
-		} else if (tok.data == "b") {
-			m_is_bold = true;
-		} else if (tok.data == "/b") {
-			m_is_bold = false;
-		} else if (tok.data == "small") {
-			m_size -= 2;
-		} else if (tok.data == "/small") {
-			m_size += 2;
-		} else if (tok.data == "big") {
-			m_size += 4;
-		} else if (tok.data == "/big") {
-			m_size -= 4;
-		} else if (tok.data == "br") {
-			flush();
-		} else if (tok.data == "/p") {
-			flush();
-			m_cursor_y += VSTEP;
-		// todo: remove. this is non-standard
-		} else if (tok.data == "h1 class=\"title\"") {
-			flush();
-			m_in_title = true;
-		} else if (tok.data == "/h1") {
-			flush();
-			m_in_title = false;
-		} else if (tok.data == "sup") {
-			m_in_sup = true;
-			// todo: halving text looks stupid, but it is probably an ascent related issue 
-			m_size -= 2;
-		} else if (tok.data == "/sup") {
-			m_in_sup = false;
-			m_size += 2;
-		} else {
-			// do nothing
+	} else if (node.type == NodeType::Tag) {
+		Tag const& tag = static_cast<Tag const&>(node);
+		open_tag(tag);
+		for (auto const& child : node.children) {
+			recurse(*child, font_cache);
 		}
+		close_tag(tag);
 	} else {
 		assert(false && "unreachable");
 	}
+}
+
+void Layout::open_tag(Tag const& tag) {
+	if (tag.tag == "i") {
+		m_is_italic = true;
+	} else if (tag.tag == "b") {
+		m_is_bold = true;
+	} else if (tag.tag == "small") {
+		m_size -= 2;
+	} else if (tag.tag == "big") {
+		m_size += 4;
+	} else if (tag.tag == "br") {
+		flush();
+	} else if (tag.tag == "p") {
+	} else if (tag.tag == "h1") {
+		// todo: remove. this is non-standard
+		if (auto f = tag.attributes.find("class"); f != tag.attributes.end() && f->second == "title") {
+			flush();
+			m_in_title = true;
+		}
+	} else if (tag.tag == "sup") {
+		m_in_sup = true;
+		// todo: halving text looks stupid, but it is probably an ascent related issue 
+		m_size -= 2;
+	}
+	// no more recognized tags
+}
+void Layout::close_tag(Tag const& tag) {
+	if (tag.tag == "i") {
+		m_is_italic = false;
+	} else if (tag.tag == "b") {
+		m_is_bold = false;
+	} else if (tag.tag == "small") {
+		m_size += 2;
+	} else if (tag.tag == "big") {
+		m_size -= 4;
+	} else if (tag.tag == "p") {
+		flush();
+		m_cursor_y += VSTEP;
+	} else if (tag.tag == "h1") {
+		flush();
+		m_in_title = false;
+	} else if (tag.tag == "sup") {
+		m_in_sup = false;
+		m_size += 2;
+	}
+	// no more recognized tags
 }
 
 void Layout::word(std::string_view word, SkFont& font) {

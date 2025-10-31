@@ -8,7 +8,7 @@ find_package(harfbuzz CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(unofficial-skia CONFIG REQUIRED)
 
-add_executable(ladybug src/main.cpp src/utils.cpp src/network.cpp src/layout.cpp)
+add_executable(ladybug src/main.cpp src/utils.cpp src/network.cpp src/layout.cpp src/html_parser.cpp)
 
 target_link_libraries(ladybug PRIVATE z ssl crypto)
 

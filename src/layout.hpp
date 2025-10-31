@@ -4,19 +4,8 @@
 #include <unordered_map>
 
 #include "utils.hpp"
+#include "html_parser.hpp"
 #include "include/core/SkFont.h"
-
-enum class TokenTag {
-	Text,
-	Tag,
-};
-
-struct Token {
-	TokenTag tag;
-	std::string data;
-};
-
-std::vector<Token> lex(std::string_view body);
 
 struct StringPosition {
 	float x, y;
@@ -83,11 +72,13 @@ class Layout {
 	bool m_right_align;
 
 public:
-	Layout(std::vector<Token> const& tokens, FontCache& font_cache, int width, bool right_align);
+	Layout(Node const& root, FontCache& font_cache, int width, bool right_align);
 	ComputedLayout computed() const;
 
 private:
-	void token(Token const& tok, FontCache& font_cache);
+	void recurse(Node const& tok, FontCache& font_cache);
+	void open_tag(Tag const& tag);
+	void close_tag(Tag const& tag);
 	void word(std::string_view word, SkFont& font);
 	void flush();
 };

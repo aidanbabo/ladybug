@@ -16,6 +16,8 @@
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
 
+#include <cctype>
+#include <iostream>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <zlib.h>
@@ -55,7 +57,8 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
-	std::vector<Token> m_tokens;
+	// todo: smart pointer
+	Node * m_nodes;
 	ComputedLayout m_layout;
 	FontCache m_font_cache;
 
@@ -108,8 +111,9 @@ public:
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
-		m_tokens = lex(body);
-		m_layout = Layout(m_tokens, m_font_cache, m_width, m_right_align).computed();
+		m_nodes = HTMLParser(body).parse();
+		//print_node(*m_nodes);
+		m_layout = Layout(*m_nodes, m_font_cache, m_width, m_right_align).computed();
 		draw();
 	}
 	
@@ -161,7 +165,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = Layout(m_tokens, m_font_cache, m_width, m_right_align).computed();
+		m_layout = Layout(*m_nodes, m_font_cache, m_width, m_right_align).computed();
 		// todo: do one better, make the scroll proportional to the new screen size
 		// either by making m_scroll a float, or by recalculating it on resize.
 		clamp_scroll();
@@ -221,6 +225,7 @@ private:
 };
 
 int main(int argc, char** argv) {
+
 	bool done = false;
 
 	SDL_Init(SDL_INIT_VIDEO);

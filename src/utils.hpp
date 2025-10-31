@@ -9,4 +9,4 @@ inline constexpr int const VSTEP = 18;
 void combine_hash(size_t &seed, size_t value);
 [[nodiscard]] std::string_view trim_whitespace(std::string_view s);
 std::vector<std::string_view> split(std::string_view s, std::string_view delimiter, int nsplits = -1);
-std::vector<std::string_view> split_on_any(std::string_view s, std::string_view delimiters, int nsplits = -1);
+std::vector<std::string_view> split_on_any(std::string_view s, std::string_view delimiters = " \t\n\r\f\v", int nsplits = -1);

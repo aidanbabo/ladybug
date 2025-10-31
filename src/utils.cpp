@@ -20,6 +20,7 @@ std::string_view trim_whitespace(std::string_view s) {
 
 // todo: make more generic
 std::vector<std::string_view> split(std::string_view s, std::string_view delimiter, int nsplits) {
+	;
 	std::vector<std::string_view> items;
 	size_t start = 0;
 	// todo: make smaller
