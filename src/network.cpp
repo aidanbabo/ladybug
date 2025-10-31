@@ -537,6 +537,10 @@ public:
 				}
 			}
 		}
+
+		if (decompress) {
+			inflateEnd(&zstream);
+		}
 	}
 
 private:

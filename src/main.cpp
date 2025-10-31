@@ -17,7 +17,6 @@
 #include "include/ports/SkFontMgr_directory.h"
 
 #include <cctype>
-#include <iostream>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <zlib.h>
@@ -58,7 +57,7 @@ class Browser {
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
 	// todo: smart pointer
-	Node * m_nodes;
+	std::shared_ptr<Node> m_nodes;
 	ComputedLayout m_layout;
 	FontCache m_font_cache;
 

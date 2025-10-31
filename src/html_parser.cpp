@@ -33,11 +33,11 @@ static void unescape_sequence(std::string_view body, size_t &i, std::string &out
 	out.push_back('&');
 }
 
-Node::Node(Node *parent, NodeType type) : children(), parent(parent), type(type) {}
+Node::Node(std::weak_ptr<Node> parent, NodeType type) : children(), parent(parent), type(type) {}
 
-Text::Text(Node *parent, std::string text) : Node(parent, NodeType::Text), text(text) {}
+Text::Text(std::weak_ptr<Node> parent, std::string text) : Node(parent, NodeType::Text), text(text) {}
 
-Tag::Tag(Node *parent, std::string tag, std::unordered_map<std::string, std::string> attributes) 
+Tag::Tag(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes) 
 	: Node(parent, NodeType::Tag)
 	  , tag(tag)
 	  , attributes(attributes)
@@ -56,7 +56,7 @@ void HTMLParser::implicit_tags(std::optional<std::string_view> tag_) {
 		std::vector<std::string_view> open_tags(m_unfinished.size());
 		// Direct list initialization prevents the std::string from being copied to the output buffer before a conversion to std::string_view.
 		// Not preventing this means std::string_view would be dangling.
-		std::transform(m_unfinished.begin(), m_unfinished.end(), open_tags.begin(), [](Tag *t) { return std::string_view{t->tag}; });
+		std::transform(m_unfinished.begin(), m_unfinished.end(), open_tags.begin(), [](std::shared_ptr<Tag> t) { return std::string_view{t->tag}; });
 
 		if (open_tags.empty() && tag != "html") {
 			add_tag("html");
@@ -84,8 +84,8 @@ void HTMLParser::add_text(std::string text) {
 	implicit_tags(std::nullopt);
 	assert(!m_unfinished.empty());
 
-	Node *parent = m_unfinished.back();
-	Node *node = new Text(parent, text);
+	std::shared_ptr<Node> parent = m_unfinished.back();
+	std::shared_ptr<Node> node = std::make_shared<Text>(parent, text);
 	parent->children.push_back(node);
 }
 
@@ -133,41 +133,41 @@ void HTMLParser::add_tag(std::string tag_) {
 			return;
 		}
 		// todo: why aren't these one step?
-		Node *node = m_unfinished.back();
+		std::shared_ptr<Node> node = m_unfinished.back();
 		m_unfinished.pop_back();
 
 		assert(!m_unfinished.empty());
-		Node *parent = m_unfinished.back();
+		std::shared_ptr<Node> parent = m_unfinished.back();
 		parent->children.push_back(node);
 	} else if (std::find(SELF_CLOSING_TAGS.begin(), SELF_CLOSING_TAGS.end(), tag) != SELF_CLOSING_TAGS.end()) {
 		assert(!m_unfinished.empty());
-		Node *parent = m_unfinished.back();
-		Node *node = new Tag(parent, tag, attributes);
+		std::shared_ptr<Node> parent = m_unfinished.back();
+		std::shared_ptr<Node> node = std::make_shared<Tag>(parent, tag, attributes);
 		parent->children.push_back(node);
 	} else {
-		Node *parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
-		Tag *node = new Tag(parent, tag, attributes);
+		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
+		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
 		m_unfinished.push_back(node);
 	}
 }
 
-Node* HTMLParser::finish() {
+std::shared_ptr<Node> HTMLParser::finish() {
 	if (m_unfinished.empty()) {
 		implicit_tags(std::nullopt);
 
 	}
 	while (m_unfinished.size() > 1) {
-		Node *node = m_unfinished.back();
+		std::shared_ptr<Node> node = m_unfinished.back();
 		m_unfinished.pop_back();
-		Node *parent = m_unfinished.back();
+		std::shared_ptr<Node> parent = m_unfinished.back();
 		parent->children.push_back(node);
 	}
-	Node *root = m_unfinished.back();
+	std::shared_ptr<Node> root = m_unfinished.back();
 	m_unfinished.pop_back();
 	return root;
 }
 
-Node* HTMLParser::parse() {
+std::shared_ptr<Node> HTMLParser::parse() {
 	std::string buffer;
 	size_t i = 0;
 	bool in_tag = false;
