@@ -89,6 +89,7 @@ void HTMLParser::add_text(std::string text) {
 }
 
 std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser::get_attributes(std::string_view text) {
+	// todo: quoted attributes
 	std::vector<std::string_view> parts = split_on_any(text);
 	std::string tag { parts[0] };
 	// casefold :( localization
@@ -186,6 +187,7 @@ std::shared_ptr<Node> HTMLParser::parse() {
 	size_t i = 0;
 	bool in_tag = false;
 	bool in_script = false;
+	bool in_quoted_attribute = false;
 	while (i < m_body.length()) {
 		if (in_script) {
 			std::string_view script_end = "</script>";
@@ -196,7 +198,12 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			in_script = false;
 		}
 		char c = m_body[i++];
-		if (c == '<') {
+		if (in_quoted_attribute) {
+			if (c == '"') {
+				in_quoted_attribute = false;
+			}
+			buffer.push_back(c);
+		} else if (c == '<') {
 			std::string_view comment_start = "!--";
 			if (m_body.compare(i, comment_start.size(), comment_start.data()) == 0) {
 				std::string_view comment_end = "-->";
@@ -222,6 +229,9 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			buffer = "";
 		} else if (!in_tag && c == '&') {
 			unescape_sequence(m_body, i, buffer);
+		} else if (in_tag && c == '"') {
+			in_quoted_attribute = true;
+			buffer.push_back(c);
 		} else { 
 			buffer.push_back(c);
 		}
