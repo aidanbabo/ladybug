@@ -7,7 +7,53 @@
 #include <cassert>
 
 #include <iostream>
+#include <memory>
+#include <numeric>
 #include <ranges>
+
+DrawCommand::DrawCommand(float left, float top, float right, float bottom)
+	: left(left)
+	, top(top)
+	, right(right)
+	, bottom(bottom)
+{}
+
+DrawText::DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, bool is_super_text)
+	: DrawCommand(left, top, right, bottom)
+	, text(text)
+	, font(font)
+	, is_super_text(is_super_text)
+{}
+
+std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, std::string text, SkFont font, bool is_super_text) {
+	SkFontMetrics m;
+	font.getMetrics(&m);
+	// todo: leading?
+	float bottom = top + m.fDescent - m.fAscent;
+	return std::make_shared<DrawText>(left, top, left + width, bottom, text, font, is_super_text);
+}
+
+void DrawText::execute(float scroll, SkCanvas& canvas) {
+	SkPaint paint;
+	paint.setColor(SK_ColorBLACK);
+	canvas.drawString(text.c_str(), left, top - scroll, font, paint);
+}
+
+DrawRect::DrawRect(float left, float top, float right, float bottom, SkColor color)
+	: DrawCommand(left, top, right, bottom)
+	, color(color)
+{}
+
+std::shared_ptr<DrawRect> DrawRect::createLTRB(float left, float top, float right, float bottom, SkColor color) {
+	return std::make_shared<DrawRect>(left, top, right, bottom, color);
+}
+
+void DrawRect::execute(float scroll, SkCanvas& canvas) {
+	SkRect rect = SkRect::MakeLTRB(left, top - scroll, right, bottom - scroll);
+	SkPaint paint;
+	paint.setColor(color);
+	canvas.drawRect(rect, paint);
+}
 
 bool FontInfo::operator==(const FontInfo& other) const noexcept {
 	return size == other.size && bold == other.bold && italic == other.italic;
@@ -51,25 +97,119 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 	return m_fonts[info];
 }
 
-// Class based approach is super OO, but it's fine.
-// I guess I would just use a struct and not make them member functions... sooo... nbd
-Layout::Layout(Node const& root, FontCache& font_cache, int width, bool right_align) {
-	m_width = width;
-	m_right_align = right_align;
+LayoutBase::LayoutBase(std::shared_ptr<Node> node, std::weak_ptr<LayoutBase> parent)
+	: m_node(node)
+	, m_parent(parent)
+{}
 
-	recurse(root, font_cache);
+void LayoutBase::print_layout(int indent) {
+	for (int i = 0; i < indent; i++) {
+		std::cout << " ";
+	}
+	std::cout << "{x:" << m_x << ",y:" << m_y << ",w:" << m_width << ",h:" << m_height << "}" << std::endl;;
 
-	flush();
+	/*
+	if (layout.type == NodeType::Text) {
+		auto text = static_cast<Text const&>(node);
+		std::cout << text.text << std::endl;;
+	} else if (node.type == NodeType::Element) {
+		auto tag = static_cast<Element const&>(node);
+		std::cout << "<" << tag.tag << ">" << std::endl;;
+	}
+	*/
+
+	for (auto const& child : m_children) {
+		child->print_layout(indent + 2);
+	}
+}
+BlockLayout::BlockLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous)
+	: LayoutBase(node, parent)
+	, m_previous(previous)
+{
+	assert(!m_parent.expired());
 }
 
-ComputedLayout Layout::computed() const {
-	return {
-		.display_list = std::move(m_display_list),
-		.must_render_up_to_y = m_must_render_up_to_y,
-	};
+constexpr std::array BLOCK_ELEMENTS = {
+	"html", "body", "article", "section", "nav", "aside",
+	"h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
+	"footer", "address", "p", "hr", "pre", "blockquote",
+	"ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+	"figcaption", "main", "div", "table", "form", "fieldset",
+	"legend", "details", "summary"
+};
+
+LayoutMode BlockLayout::layout_mode() const {
+	if (m_node->type == NodeType::Text) {
+		return LayoutMode::Inline;
+	}
+	for (auto const& child : m_node->children) {
+		if (child->type == NodeType::Element) {
+			auto element = static_cast<Element const&>(*child);
+			if (std::find(BLOCK_ELEMENTS.begin(), BLOCK_ELEMENTS.end(), element.tag) != BLOCK_ELEMENTS.end()) {
+				return LayoutMode::Block;
+			}
+		}
+	}
+	if (!m_node->children.empty()) {
+		return LayoutMode::Inline;
+	}
+	return LayoutMode::Block;
 }
 
-void Layout::recurse(Node const& node, FontCache& font_cache) {
+void BlockLayout::layout(FontCache& font_cache, bool right_align) {
+	m_x = m_parent.lock()->m_x;
+	m_width = m_parent.lock()->m_width;
+	if (auto previous = m_previous.lock()) {
+		m_y = previous->m_y + previous->m_height; 
+	} else {
+		// can't access protected member :(
+		m_y = m_parent.lock()->m_y;
+	}
+
+	LayoutMode mode = layout_mode();
+	if (mode == LayoutMode::Block) {
+		std::shared_ptr<LayoutBase> shared = shared_from_this();
+		std::weak_ptr<BlockLayout> previous;
+		for (auto const& child : m_node->children) {
+			auto next = std::make_shared<BlockLayout>(child, shared, previous);
+			m_children.push_back(next);
+			previous = next;
+		}
+	} else if (mode == LayoutMode::Inline) {
+		recurse(*m_node, font_cache, right_align);
+		flush(right_align);
+	} else {
+		assert(false && "unreachable");
+	}
+
+	for (auto child : m_children) {
+		child->layout(font_cache, right_align);
+	}
+
+	if (mode == LayoutMode::Block) {
+		m_height = std::transform_reduce(m_children.begin(), m_children.end(), 0, std::plus<>{}, [](auto const& c) { return c->m_height; });
+	} else if (mode == LayoutMode::Inline) {
+		m_height = m_cursor_y;
+	} else {
+		assert(false && "unreachable");
+	}
+}
+
+void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
+	if (m_node->type == NodeType::Element) {
+		auto element = static_cast<Element const&>(*m_node);
+		if (element.tag == "pre") {
+			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
+			commands.push_back(rect);
+		}
+	}
+	for (auto const& pos : m_display_list) {
+		auto cmd = DrawText::create(pos.left, pos.top, pos.width, pos.text, pos.font, pos.is_super_text);
+		commands.push_back(cmd);
+	}
+}
+
+void BlockLayout::recurse(Node const& node, FontCache& font_cache, bool right_align) {
 	if (node.type == NodeType::Text) {
 		Text const& text = static_cast<Text const&>(node);
 
@@ -78,22 +218,22 @@ void Layout::recurse(Node const& node, FontCache& font_cache) {
 		for (auto w : words) {
 			w = trim_whitespace(w);
 			if (w != "") {
-				word(w, font);
+				word(w, font, right_align);
 			}
 		}
-	} else if (node.type == NodeType::Tag) {
-		Tag const& tag = static_cast<Tag const&>(node);
-		open_tag(tag);
+	} else if (node.type == NodeType::Element) {
+		Element const& tag = static_cast<Element const&>(node);
+		open_tag(tag, right_align);
 		for (auto const& child : node.children) {
-			recurse(*child, font_cache);
+			recurse(*child, font_cache, right_align);
 		}
-		close_tag(tag);
+		close_tag(tag, right_align);
 	} else {
 		assert(false && "unreachable");
 	}
 }
 
-void Layout::open_tag(Tag const& tag) {
+void BlockLayout::open_tag(Element const& tag, bool right_align) {
 	if (tag.tag == "i") {
 		m_is_italic = true;
 	} else if (tag.tag == "b") {
@@ -103,12 +243,12 @@ void Layout::open_tag(Tag const& tag) {
 	} else if (tag.tag == "big") {
 		m_size += 4;
 	} else if (tag.tag == "br") {
-		flush();
+		flush(right_align);
 	} else if (tag.tag == "p") {
 	} else if (tag.tag == "h1") {
 		// todo: remove. this is non-standard
 		if (auto f = tag.attributes.find("class"); f != tag.attributes.end() && f->second == "title") {
-			flush();
+			flush(right_align);
 			m_in_title = true;
 		}
 	} else if (tag.tag == "sup") {
@@ -118,7 +258,7 @@ void Layout::open_tag(Tag const& tag) {
 	}
 	// no more recognized tags
 }
-void Layout::close_tag(Tag const& tag) {
+void BlockLayout::close_tag(Element const& tag, bool right_align) {
 	if (tag.tag == "i") {
 		m_is_italic = false;
 	} else if (tag.tag == "b") {
@@ -128,10 +268,10 @@ void Layout::close_tag(Tag const& tag) {
 	} else if (tag.tag == "big") {
 		m_size -= 4;
 	} else if (tag.tag == "p") {
-		flush();
+		flush(right_align);
 		m_cursor_y += VSTEP;
 	} else if (tag.tag == "h1") {
-		flush();
+		flush(right_align);
 		m_in_title = false;
 	} else if (tag.tag == "sup") {
 		m_in_sup = false;
@@ -140,7 +280,7 @@ void Layout::close_tag(Tag const& tag) {
 	// no more recognized tags
 }
 
-void Layout::word(std::string_view word, SkFont& font) {
+void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 	// The algorithm is to split a word into its separable parts and to try and render all of the parts at once.
 	// If this fails we remove the last separable part and try again.
 	//   We keep track of these parts to be rendered later (on a new line).
@@ -162,16 +302,15 @@ void Layout::word(std::string_view word, SkFont& font) {
 		if (!hyphens_to_render_later.empty()) {
 			word_to_render += "-";
 		}
-		auto text_width_max = m_width - HSTEP - m_cursor_x;
+		auto text_width_max = m_width - m_cursor_x;
 		auto w = font.measureText(word_to_render.c_str(), word_to_render.size(), SkTextEncoding::kUTF8);
 
 		if (w < text_width_max || (m_cursor_x == HSTEP && soft_hyphen_split.size() == 1)) {
 			// If the word fits or will never fit at the current resolution we render it!
 			auto pos = StringPosition {
-				.x = m_cursor_x,
-				.y = -1, // filled in during `flush`
+				.left = m_cursor_x,
 				.width = w,
-				.string = std::move(word_to_render),
+				.text = std::move(word_to_render),
 				.font = font,
 				.is_super_text = m_in_sup,
 			};
@@ -183,7 +322,7 @@ void Layout::word(std::string_view word, SkFont& font) {
 			// Optimization: If there is more work, it is because this line is full, so we must flush anyway!
 			// This prevents us from trying to split the remaining string over and over when none of it will fit.
 			if (!hyphens_to_render_later.empty()) {
-				flush();
+				flush(right_align);
 			}
 			// When there are no leftovers here we will exit the loop.
 			soft_hyphen_split = hyphens_to_render_later;
@@ -194,7 +333,7 @@ void Layout::word(std::string_view word, SkFont& font) {
 			hyphens_to_render_later.insert(hyphens_to_render_later.begin(), v);
 		} else {
 			// The word didn't fit and we couldn't split it, so we flush and try the next line.
-			flush();
+			flush(right_align);
 			soft_hyphen_split.insert(soft_hyphen_split.end(), hyphens_to_render_later.begin(), hyphens_to_render_later.end());
 			hyphens_to_render_later = {};
 		}
@@ -205,7 +344,7 @@ void Layout::word(std::string_view word, SkFont& font) {
 	}
 }
 
-void Layout::flush() {
+void BlockLayout::flush(bool right_align) {
 	if (m_line.empty()) {
 		return;
 	}
@@ -227,30 +366,64 @@ void Layout::flush() {
 	// Skia draws text from the baseline, not from the NW like Tkinter
 	for (auto & pos : m_line) {
 		if (pos.is_super_text) {
-			pos.y = baseline - max_ascent / 2;
+			pos.top = baseline - max_ascent / 2;
 		} else {
-			pos.y = baseline;
+			pos.top = baseline;
 		}
 	}
 
-	if (m_in_title || m_right_align) {
+	if (m_in_title || right_align) {
 		auto const& w = m_line.back();
-		float right_side_gap = (float) m_width - w.x - w.width - (float) HSTEP;
+		float right_side_gap = (float) m_width - w.left - w.width - (float) HSTEP;
 
 		float change = (m_in_title) ? right_side_gap / 2 : right_side_gap;
 		for (auto &pos : m_line) {
-			pos.x += change;
+			pos.left += change;
 		}
 	}
 
 	auto descents = std::views::transform(metrics, &SkFontMetrics::fDescent);
 	float max_descent = std::ranges::max(descents);
 
+	// make positions relative
+	for (auto& pos : m_line) {
+		pos.left += m_x;
+		pos.top += m_y;
+	}
+
 	// todo: metrics.fLeading
 	m_cursor_y = baseline + max_descent * 1.25;
-	m_cursor_x = HSTEP;
+	m_cursor_x = 0;
 	m_display_list.insert(m_display_list.end(), m_line.begin(), m_line.end());
 	m_line = {};
 	assert(m_cursor_y + VSTEP >= m_must_render_up_to_y);
 	m_must_render_up_to_y = m_cursor_y + VSTEP;
+}
+
+DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width, bool right_align)
+	: LayoutBase(node, std::weak_ptr<LayoutBase>())
+	, m_font_cache(font_cache)
+	, m_screen_width(screen_width)
+	, m_right_align(right_align)
+{}
+
+void DocumentLayout::layout() {
+	std::shared_ptr<LayoutBase> shared = shared_from_this();
+	auto child = std::make_shared<BlockLayout>(m_node, shared, std::weak_ptr<BlockLayout>());
+	m_children.push_back(child);
+	m_x = HSTEP;
+	m_y = VSTEP;
+	m_width = m_screen_width - 2 * HSTEP;
+	child->layout(m_font_cache, m_right_align);
+	m_height = child->m_height;
+}
+
+void DocumentLayout::paint(std::vector<std::shared_ptr<DrawCommand>>&) const {}
+
+void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& commands) {
+	layout.paint(commands);
+
+	for (auto child : layout.m_children) {
+		paint_tree(*child, commands);
+	}
 }

@@ -58,9 +58,10 @@ class Browser {
 	sk_sp<SkSurface> m_root_surface;
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
-	// todo: smart pointer
 	std::shared_ptr<Node> m_nodes;
-	ComputedLayout m_layout;
+	std::shared_ptr<DocumentLayout> m_layout;
+	// todo: rename?
+	std::vector<std::shared_ptr<DrawCommand>> m_display_list;
 	FontCache m_font_cache;
 
 	int m_scroll = 0;
@@ -114,7 +115,11 @@ public:
 		std::string body = cm.request(url);
 		m_nodes = HTMLParser(body).parse();
 		//print_node(*m_nodes);
-		m_layout = Layout(*m_nodes, m_font_cache, m_width, m_right_align).computed();
+		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width, m_right_align);
+		m_layout->layout();
+		//m_layout->print_layout();
+		m_display_list.clear();
+		paint_tree(*m_layout, m_display_list);
 		draw();
 	}
 	
@@ -126,16 +131,15 @@ public:
 		canvas->clear(SK_ColorWHITE);
 
 		// content
-		for (auto cpos : m_layout.display_list) {
-			// todo: adding VSTEP is a crutch? idk why it doesn't work without it
-			if (cpos.y > m_scroll + m_height + VSTEP) continue;
-			if (cpos.y + VSTEP < m_scroll) continue;
-			canvas->drawString(cpos.string.c_str(), cpos.x, cpos.y - m_scroll, cpos.font, paint);
+		for (auto command : m_display_list) {
+			if (command->top > m_scroll + m_height) continue;
+			if (command->bottom < m_scroll) continue;
+			command->execute(m_scroll, *canvas);
 		}
 
 		// scrollbar
-		if (m_height < m_layout.must_render_up_to_y) {
-			float scrollbar_ratio = (float) m_height / (float) m_layout.must_render_up_to_y;
+		if (m_height < m_layout->m_height) {
+			float scrollbar_ratio = (float) m_height / (float) m_layout->m_height;
 			float scrollbar_size = scrollbar_ratio * (float) m_height;
 			float scrollbar_start = scrollbar_ratio * (float) m_scroll;
 			paint.setColor(SK_ColorBLUE);
@@ -166,7 +170,10 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = Layout(*m_nodes, m_font_cache, m_width, m_right_align).computed();
+		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width, m_right_align);
+		m_layout->layout();
+		m_display_list.clear();
+		paint_tree(*m_layout, m_display_list);
 		// todo: do one better, make the scroll proportional to the new screen size
 		// either by making m_scroll a float, or by recalculating it on resize.
 		clamp_scroll();
@@ -178,7 +185,7 @@ public:
 			m_scroll = 0;
 		}
 
-		int max_scroll = m_layout.must_render_up_to_y - m_height;
+		int max_scroll = m_layout->m_height - m_height;
 		if (max_scroll < 0) {
 			m_scroll = 0;
 		} else if (m_scroll > max_scroll) {
@@ -221,6 +228,7 @@ private:
 		, m_surface_info(surface_info)
 		, m_font_mgr(font_mgr)
 		, m_layout()
+		, m_display_list()
 		, m_font_cache(font_cache)
 	{}
 };

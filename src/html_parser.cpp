@@ -14,8 +14,8 @@ Node::Node(std::weak_ptr<Node> parent, NodeType type) : children(), parent(paren
 
 Text::Text(std::weak_ptr<Node> parent, std::string text) : Node(parent, NodeType::Text), text(text) {}
 
-Tag::Tag(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes) 
-	: Node(parent, NodeType::Tag)
+Element::Element(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes) 
+	: Node(parent, NodeType::Element)
 	  , tag(tag)
 	  , attributes(attributes)
 {}
@@ -32,7 +32,7 @@ void HTMLParser::implicit_tags(std::optional<std::string_view> tag_) {
 		std::vector<std::string_view> open_tags(m_unfinished.size());
 		// Direct list initialization prevents the std::string from being copied to the output buffer before a conversion to std::string_view.
 		// Not preventing this means std::string_view would be dangling.
-		std::transform(m_unfinished.begin(), m_unfinished.end(), open_tags.begin(), [](std::shared_ptr<Tag> t) { return std::string_view{t->tag}; });
+		std::transform(m_unfinished.begin(), m_unfinished.end(), open_tags.begin(), [](std::shared_ptr<Element> t) { return std::string_view{t->tag}; });
 
 		if (open_tags.empty() && tag != "html") {
 			add_tag("html");
@@ -96,7 +96,7 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 	return { tag, attributes };
 }
 
-std::optional<std::shared_ptr<Tag>> HTMLParser::add_tag(std::string tag_) {
+std::optional<std::shared_ptr<Element>> HTMLParser::add_tag(std::string tag_) {
 	auto [tag, attributes] = get_attributes(tag_);
 
 	if (tag.starts_with("!")) {
@@ -110,7 +110,7 @@ std::optional<std::shared_ptr<Tag>> HTMLParser::add_tag(std::string tag_) {
 			return std::nullopt;
 		}
 		// todo: why aren't these one step?
-		std::shared_ptr<Tag> node = m_unfinished.back();
+		std::shared_ptr<Element> node = m_unfinished.back();
 		m_unfinished.pop_back();
 		// todo: check it's the right tag?
 
@@ -121,7 +121,7 @@ std::optional<std::shared_ptr<Tag>> HTMLParser::add_tag(std::string tag_) {
 	} else if (std::find(SELF_CLOSING_TAGS.begin(), SELF_CLOSING_TAGS.end(), tag) != SELF_CLOSING_TAGS.end()) {
 		assert(!m_unfinished.empty());
 		std::shared_ptr<Node> parent = m_unfinished.back();
-		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
+		std::shared_ptr<Element> node = std::make_shared<Element>(parent, tag, attributes);
 		parent->children.push_back(node);
 		return node;
 	} else {
@@ -137,7 +137,7 @@ std::optional<std::shared_ptr<Tag>> HTMLParser::add_tag(std::string tag_) {
 			// todo: return something here? is this valuable?
 		}
 		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
-		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
+		std::shared_ptr<Element> node = std::make_shared<Element>(parent, tag, attributes);
 		m_unfinished.push_back(node);
 		return node;
 	}
@@ -197,8 +197,8 @@ std::shared_ptr<Node> HTMLParser::parse() {
 		} else if (c == '>') {
 			in_tag = false;
 			if (!buffer.empty()) {
-				if (auto tag = add_tag(buffer); tag) {
-					if (tag.value()->tag == "script") {
+				if (auto tag = add_tag(buffer)) {
+					if (tag.value()->tag == "script" && tag.value()->attributes.find("src") == tag.value()->attributes.end()) {
 						in_script = true;
 					}
 				}
@@ -228,8 +228,8 @@ void print_node(Node const& node, int indent) {
 	if (node.type == NodeType::Text) {
 		auto text = static_cast<Text const&>(node);
 		std::cout << text.text << std::endl;;
-	} else if (node.type == NodeType::Tag) {
-		auto tag = static_cast<Tag const&>(node);
+	} else if (node.type == NodeType::Element) {
+		auto tag = static_cast<Element const&>(node);
 		std::cout << "<" << tag.tag << ">" << std::endl;;
 	}
 
