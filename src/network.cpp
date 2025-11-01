@@ -665,6 +665,7 @@ void ConnectionManager::print_active_connections() const {
 std::string ConnectionManager::load_file(URL url) const {
 	std::ifstream file(url.path);
 	if (!file.is_open()) {
+		// todo: fail to open the page
 		std::cerr << "Invalid path" << std::endl;
 		exit(1);
 	}

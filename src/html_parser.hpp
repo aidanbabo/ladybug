@@ -41,7 +41,7 @@ public:
 private:
 	void add_text(std::string text);
 	std::pair<std::string, std::unordered_map<std::string, std::string>> get_attributes(std::string_view text);
-	void add_tag(std::string tag);
+	std::optional<std::shared_ptr<Tag>> add_tag(std::string tag);
 	void implicit_tags(std::optional<std::string_view>);
 	std::shared_ptr<Node> finish();
 };

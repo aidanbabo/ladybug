@@ -118,32 +118,34 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 	return { tag, attributes };
 }
 
-void HTMLParser::add_tag(std::string tag_) {
+std::optional<std::shared_ptr<Tag>> HTMLParser::add_tag(std::string tag_) {
 	auto [tag, attributes] = get_attributes(tag_);
 
 	if (tag.starts_with("!")) {
-		return;
+		return std::nullopt;
 	}
 	implicit_tags(tag);
 
 	if (tag.starts_with("/")) {
 		// last tag doesn't have a parent
 		if (m_unfinished.size() == 1) {
-			return;
+			return std::nullopt;
 		}
 		// todo: why aren't these one step?
-		std::shared_ptr<Node> node = m_unfinished.back();
+		std::shared_ptr<Tag> node = m_unfinished.back();
 		m_unfinished.pop_back();
 		// todo: check it's the right tag?
 
 		assert(!m_unfinished.empty());
 		std::shared_ptr<Node> parent = m_unfinished.back();
 		parent->children.push_back(node);
+		return node;
 	} else if (std::find(SELF_CLOSING_TAGS.begin(), SELF_CLOSING_TAGS.end(), tag) != SELF_CLOSING_TAGS.end()) {
 		assert(!m_unfinished.empty());
 		std::shared_ptr<Node> parent = m_unfinished.back();
-		std::shared_ptr<Node> node = std::make_shared<Tag>(parent, tag, attributes);
+		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
 		parent->children.push_back(node);
+		return node;
 	} else {
 		if ((tag == "p" && !m_unfinished.empty() && m_unfinished.back()->tag == "p")
 		|| (tag == "li" && !m_unfinished.empty() && m_unfinished.back()->tag == "li")) {
@@ -154,10 +156,12 @@ void HTMLParser::add_tag(std::string tag_) {
 			assert(!m_unfinished.empty());
 			std::shared_ptr<Node> parent = m_unfinished.back();
 			parent->children.push_back(node);
+			// todo: return something here? is this valuable?
 		}
 		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
 		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
 		m_unfinished.push_back(node);
+		return node;
 	}
 }
 
@@ -181,7 +185,16 @@ std::shared_ptr<Node> HTMLParser::parse() {
 	std::string buffer;
 	size_t i = 0;
 	bool in_tag = false;
+	bool in_script = false;
 	while (i < m_body.length()) {
+		if (in_script) {
+			std::string_view script_end = "</script>";
+			size_t script_end_start = m_body.find(script_end, i);
+			assert(script_end_start != std::string::npos);
+			add_tag(std::string{ script_end });
+			i = script_end_start + script_end.size();
+			in_script = false;
+		}
 		char c = m_body[i++];
 		if (c == '<') {
 			std::string_view comment_start = "!--";
@@ -200,7 +213,11 @@ std::shared_ptr<Node> HTMLParser::parse() {
 		} else if (c == '>') {
 			in_tag = false;
 			if (!buffer.empty()) {
-				add_tag(buffer);
+				if (auto tag = add_tag(buffer); tag) {
+					if (tag.value()->tag == "script") {
+						in_script = true;
+					}
+				}
 			}
 			buffer = "";
 		} else if (!in_tag && c == '&') {
@@ -209,6 +226,7 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			buffer.push_back(c);
 		}
 	}
+	// todo: handle in_script
 
 	if (!in_tag && !buffer.empty()) {
 		add_text(buffer);
