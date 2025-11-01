@@ -10,29 +10,6 @@
 constexpr std::array SELF_CLOSING_TAGS = { "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
 constexpr std::array HEAD_TAGS = { "base", "basefont", "bgsound", "noscript", "link", "meta", "title", "style", "script" };
 
-static void unescape_sequence(std::string_view body, size_t &i, std::string &out) {
-	// todo: allow semicolons or no semicolons
-	struct EscapeSequence {
-		std::string_view sequence;
-		std::string_view replacement;
-	};
-	constexpr std::array escapes = std::to_array<EscapeSequence>({
-		{"lt;", "<"},
-		{"gt;", ">"},
-		{"amp;", "&"},
-		{"quot;", "\""},
-		{"shy", SOFT_HYPHEN},
-	});
-	for (auto escape : escapes) {
-		if (body.compare(i, escape.sequence.size(), escape.sequence) == 0) {
-			i += escape.sequence.size();
-			out += escape.replacement;
-			return;
-		}
-	}
-	out.push_back('&');
-}
-
 Node::Node(std::weak_ptr<Node> parent, NodeType type) : children(), parent(parent), type(type) {}
 
 Text::Text(std::weak_ptr<Node> parent, std::string text) : Node(parent, NodeType::Text), text(text) {}

@@ -1,6 +1,8 @@
 // todo: Exercise 2-5: Emoji -> done with text stuff for now
 // todo: Exercise 3-4: Small caps -> done with text stuff for now
-// todo: Exercise 3-5: Small caps -> done with text stuff for now
+// todo: Exercise 3-5: Preformatted text -> done with text stuff for now
+// todo: Exercise 4-5: Syntax highlighting -> assuming CSS will make the implementation better/not interested
+// todo: Exercise 4-6: Mis-nested formatting tags -> assuming we get to it a little better later
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>

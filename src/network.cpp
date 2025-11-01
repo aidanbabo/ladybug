@@ -27,22 +27,6 @@ void network_init() {
 	OpenSSL_add_all_algorithms();
 }
 
-static std::string escape(std::string_view source) {
-	std::string output;
-	for (char c : source) {
-		if (c == '&') {
-			output.append("&amp;");
-		} else if (c == '<') {
-			output.append("&lt;");
-		} else if (c == '>') {
-			output.append("&gt;");
-		} else {
-			output.push_back(c);
-		}
-	}
-	return output;
-}
-
 std::optional<URL> URL::create(std::string_view string) {
 	auto n = string.find(":");
 	if (n == std::string::npos) {

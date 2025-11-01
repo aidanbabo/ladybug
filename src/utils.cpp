@@ -1,3 +1,5 @@
+#include <array>
+
 #include "utils.hpp"
 
 // from Boost
@@ -53,4 +55,49 @@ std::vector<std::string_view> split_on_any(std::string_view s, std::string_view 
 		items.push_back(item);
 		start = end_pos + 1;
 	}
+}
+
+// todo: allow semicolons or no semicolons
+struct EscapeSequence {
+	std::string_view sequence;
+	std::string_view replacement;
+};
+
+constexpr std::array ESCAPES = std::to_array<EscapeSequence>({
+	{"lt;", "<"},
+	{"gt;", ">"},
+	{"amp;", "&"},
+	{"quot;", "\""},
+	{"shy", SOFT_HYPHEN},
+});
+
+std::string escape(std::string_view source) {
+	std::string output;
+	for (size_t i = 0; i < source.size(); i++) {
+		// todo: goto is so hard in C++ :(
+		bool escaped = false;
+		for (auto escape : ESCAPES) {
+			if (source.compare(i, escape.replacement.size(), escape.replacement) == 0) {
+				output.push_back('&');
+				output.append(escape.sequence);
+				escaped = true;
+				break;
+			}
+		}
+		if (!escaped) {
+			output.push_back(source[i]);
+		}
+	}
+	return output;
+}
+
+void unescape_sequence(std::string_view source, size_t &offset, std::string &output_buffer) {
+	for (auto escape : ESCAPES) {
+		if (source.compare(offset, escape.sequence.size(), escape.sequence) == 0) {
+			offset += escape.sequence.size();
+			output_buffer += escape.replacement;
+			return;
+		}
+	}
+	output_buffer.push_back('&');
 }
