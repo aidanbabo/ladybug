@@ -134,6 +134,7 @@ void HTMLParser::add_tag(std::string tag_) {
 		// todo: why aren't these one step?
 		std::shared_ptr<Node> node = m_unfinished.back();
 		m_unfinished.pop_back();
+		// todo: check it's the right tag?
 
 		assert(!m_unfinished.empty());
 		std::shared_ptr<Node> parent = m_unfinished.back();
@@ -144,6 +145,16 @@ void HTMLParser::add_tag(std::string tag_) {
 		std::shared_ptr<Node> node = std::make_shared<Tag>(parent, tag, attributes);
 		parent->children.push_back(node);
 	} else {
+		if ((tag == "p" && !m_unfinished.empty() && m_unfinished.back()->tag == "p")
+		|| (tag == "li" && !m_unfinished.empty() && m_unfinished.back()->tag == "li")) {
+			// close
+			std::shared_ptr<Node> node = m_unfinished.back();
+			m_unfinished.pop_back();
+
+			assert(!m_unfinished.empty());
+			std::shared_ptr<Node> parent = m_unfinished.back();
+			parent->children.push_back(node);
+		}
 		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
 		std::shared_ptr<Tag> node = std::make_shared<Tag>(parent, tag, attributes);
 		m_unfinished.push_back(node);
