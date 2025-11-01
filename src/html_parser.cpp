@@ -48,7 +48,6 @@ HTMLParser::HTMLParser(std::string body)
 	, m_unfinished()
 {}
 
-// todo: debug :(
 void HTMLParser::implicit_tags(std::optional<std::string_view> tag_) {
 	std::string_view tag = tag_.value_or("");
 	for (;;) {
@@ -174,11 +173,19 @@ std::shared_ptr<Node> HTMLParser::parse() {
 	while (i < m_body.length()) {
 		char c = m_body[i++];
 		if (c == '<') {
-			in_tag = true;
-			if (!buffer.empty()) {
-				add_text(buffer);
+			std::string_view comment_start = "!--";
+			if (m_body.compare(i, comment_start.size(), comment_start.data()) == 0) {
+				std::string_view comment_end = "-->";
+				size_t comment_end_start = m_body.find(comment_end, i + comment_start.size());
+				assert(comment_end_start != std::string::npos);
+				i = comment_end_start + comment_end.size();
+			} else {
+				in_tag = true;
+				if (!buffer.empty()) {
+					add_text(buffer);
+				}
+				buffer = "";
 			}
-			buffer = "";
 		} else if (c == '>') {
 			in_tag = false;
 			if (!buffer.empty()) {
