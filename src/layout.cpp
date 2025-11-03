@@ -106,17 +106,15 @@ void LayoutBase::print_layout(int indent) {
 	for (int i = 0; i < indent; i++) {
 		std::cout << " ";
 	}
-	std::cout << "{x:" << m_x << ",y:" << m_y << ",w:" << m_width << ",h:" << m_height << "}" << std::endl;;
+	std::cout << "{x:" << m_x << ",y:" << m_y << ",w:" << m_width << ",h:" << m_height << "} ";
 
-	/*
-	if (layout.type == NodeType::Text) {
-		auto text = static_cast<Text const&>(node);
+	if (m_node->type == NodeType::Text) {
+		auto text = static_cast<Text const&>(*m_node);
 		std::cout << text.text << std::endl;;
-	} else if (node.type == NodeType::Element) {
-		auto tag = static_cast<Element const&>(node);
+	} else if (m_node->type == NodeType::Element) {
+		auto tag = static_cast<Element const&>(*m_node);
 		std::cout << "<" << tag.tag << ">" << std::endl;;
 	}
-	*/
 
 	for (auto const& child : m_children) {
 		child->print_layout(indent + 2);
@@ -171,6 +169,9 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 		std::shared_ptr<LayoutBase> shared = shared_from_this();
 		std::weak_ptr<BlockLayout> previous;
 		for (auto const& child : m_node->children) {
+			if (child->type == NodeType::Element && static_cast<Element const&>(*child).tag == "head") {
+				continue;
+			}
 			auto next = std::make_shared<BlockLayout>(child, shared, previous);
 			m_children.push_back(next);
 			previous = next;
@@ -228,12 +229,12 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache, bool right_al
 			}
 		}
 	} else if (node.type == NodeType::Element) {
-		Element const& tag = static_cast<Element const&>(node);
-		open_tag(tag, right_align);
+		Element const& element = static_cast<Element const&>(node);
+		open_tag(element, right_align);
 		for (auto const& child : node.children) {
 			recurse(*child, font_cache, right_align);
 		}
-		close_tag(tag, right_align);
+		close_tag(element, right_align);
 	} else {
 		assert(false && "unreachable");
 	}
