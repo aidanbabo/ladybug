@@ -198,6 +198,12 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
 	if (m_node->type == NodeType::Element) {
 		auto element = static_cast<Element const&>(*m_node);
+		if (element.tag == "nav") {
+			if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
+				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorLTGRAY);
+				commands.push_back(rect);
+			}
+		}
 		if (element.tag == "pre") {
 			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
 			commands.push_back(rect);
