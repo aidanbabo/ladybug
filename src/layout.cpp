@@ -245,7 +245,7 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 	}
 
 	if (mode == LayoutMode::Block) {
-		m_height = std::transform_reduce(m_children.begin(), m_children.end(), 0, std::plus<>{}, [](auto const& c) { return c->m_height; });
+		m_height = std::transform_reduce(m_children.begin(), m_children.end(), 0.0, std::plus<>{}, [](auto const& c) { return c->m_height; });
 	} else if (mode == LayoutMode::Inline) {
 		m_height = m_cursor_y;
 	} else {

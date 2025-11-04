@@ -4,6 +4,7 @@
 // todo: Exercise 4-5: Syntax highlighting -> assuming CSS will make the implementation better/not interested
 // todo: Exercise 4-6: Mis-nested formatting tags -> assuming we get to it a little better later
 // todo: Exercise 5-4: Table of contents -> seems like not a real thing? maybe a real use case will appear later on?
+// todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
