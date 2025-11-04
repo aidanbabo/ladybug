@@ -117,7 +117,7 @@ public:
 		//print_node(*m_nodes);
 		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width, m_right_align);
 		m_layout->layout();
-		m_layout->print_layout();
+		//m_layout->print_layout();
 		m_display_list.clear();
 		paint_tree(*m_layout, m_display_list);
 		draw();

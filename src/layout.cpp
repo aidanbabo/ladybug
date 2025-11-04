@@ -154,9 +154,17 @@ LayoutMode BlockLayout::layout_mode() const {
 	return LayoutMode::Block;
 }
 
+constexpr float LI_BULLET_SPACING = 3 * HSTEP;
+
 void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 	m_x = m_parent.lock()->m_x;
 	m_width = m_parent.lock()->m_width;
+	if (m_node->type == NodeType::Element) {
+		if (auto element = static_cast<Element const&>(*m_node); element.tag == "li") {
+			m_x += LI_BULLET_SPACING;
+			m_width -= LI_BULLET_SPACING;
+		}
+	}
 	if (auto previous = m_previous.lock()) {
 		m_y = previous->m_y + previous->m_height; 
 	} else {
@@ -209,6 +217,18 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
 			commands.push_back(rect);
 		}
+		if (element.tag == "li") {
+			constexpr float LI_BULLET_SIZE = ((float)VSTEP) / 3.0;
+			constexpr float VERTICAL_SPACING = VSTEP - LI_BULLET_SIZE;
+			constexpr float HORIZONTAL_SPACING = LI_BULLET_SPACING - LI_BULLET_SIZE;
+			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(
+				m_x - 0.5 * HORIZONTAL_SPACING - LI_BULLET_SIZE,
+				m_y + 0.5 * VERTICAL_SPACING,
+				m_x - 0.5 * HORIZONTAL_SPACING,
+				m_y + 0.5 * VERTICAL_SPACING + LI_BULLET_SIZE,
+				SK_ColorBLACK);
+			commands.push_back(rect);
+		}
 	}
 	for (auto const& pos : m_display_list) {
 		auto cmd = DrawText::create(pos.left, pos.top, pos.width, pos.text, pos.font, pos.is_super_text);
@@ -240,25 +260,25 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache, bool right_al
 	}
 }
 
-void BlockLayout::open_tag(Element const& tag, bool right_align) {
-	if (tag.tag == "i") {
+void BlockLayout::open_tag(Element const& element, bool right_align) {
+	if (element.tag == "i") {
 		m_is_italic = true;
-	} else if (tag.tag == "b") {
+	} else if (element.tag == "b") {
 		m_is_bold = true;
-	} else if (tag.tag == "small") {
+	} else if (element.tag == "small") {
 		m_size -= 2;
-	} else if (tag.tag == "big") {
+	} else if (element.tag == "big") {
 		m_size += 4;
-	} else if (tag.tag == "br") {
+	} else if (element.tag == "br") {
 		flush(right_align);
-	} else if (tag.tag == "p") {
-	} else if (tag.tag == "h1") {
+	} else if (element.tag == "p") {
+	} else if (element.tag == "h1") {
 		// todo: remove. this is non-standard
-		if (auto f = tag.attributes.find("class"); f != tag.attributes.end() && f->second == "title") {
+		if (auto f = element.attributes.find("class"); f != element.attributes.end() && f->second == "title") {
 			flush(right_align);
 			m_in_title = true;
 		}
-	} else if (tag.tag == "sup") {
+	} else if (element.tag == "sup") {
 		m_in_sup = true;
 		// todo: halving text looks stupid, but it is probably an ascent related issue 
 		m_size -= 2;
@@ -312,7 +332,7 @@ void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 		auto text_width_max = m_width - m_cursor_x;
 		auto w = font.measureText(word_to_render.c_str(), word_to_render.size(), SkTextEncoding::kUTF8);
 
-		if (w < text_width_max || (m_cursor_x == HSTEP && soft_hyphen_split.size() == 1)) {
+		if (w < text_width_max || (m_cursor_x == 0 && soft_hyphen_split.size() == 1)) {
 			// If the word fits or will never fit at the current resolution we render it!
 			auto pos = StringPosition {
 				.left = m_cursor_x,

@@ -170,7 +170,7 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			std::string_view script_end = "</script>";
 			size_t script_end_start = m_body.find(script_end, i);
 			assert(script_end_start != std::string::npos);
-			add_tag(std::string{ script_end });
+			add_tag(std::string{ "/script" });
 			i = script_end_start + script_end.size();
 			in_script = false;
 		}
