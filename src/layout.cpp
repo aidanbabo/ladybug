@@ -1,3 +1,4 @@
+#include "include/core/SkColor.h"
 #include "include/core/SkFontTypes.h"
 #include "include/core/SkFontMetrics.h"
 
@@ -11,6 +12,26 @@
 #include <numeric>
 #include <ranges>
 
+// todo: move uses of this to earlier in parsing, throwing out bad names
+// i.e. make it return an optional and discard the styling if it isn't a valid name
+static SkColor name_to_color(std::string_view name) {
+	static const std::unordered_map<std::string_view, SkColor> COLOR_NAMES = {
+		{ "black", SK_ColorBLACK },
+		{ "blue", SK_ColorBLUE },
+		{ "gray", SK_ColorGRAY },
+		{ "grey", SK_ColorGRAY },
+		{ "lightgray", SK_ColorLTGRAY },
+		{ "lightgrey", SK_ColorLTGRAY },
+		{ "lightblue", SkColorSetRGB(0xad, 0xd8, 0xe6) },
+	};
+
+	if (auto c = COLOR_NAMES.find(name); c != COLOR_NAMES.end()) {
+		return c->second;
+	}
+	return SK_ColorBLACK;
+}
+
+
 DrawCommand::DrawCommand(float left, float top, float right, float bottom)
 	: left(left)
 	, top(top)
@@ -18,24 +39,24 @@ DrawCommand::DrawCommand(float left, float top, float right, float bottom)
 	, bottom(bottom)
 {}
 
-DrawText::DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, bool is_super_text)
+DrawText::DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, SkColor color)
 	: DrawCommand(left, top, right, bottom)
 	, text(text)
 	, font(font)
-	, is_super_text(is_super_text)
+	, color(color)
 {}
 
-std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, std::string text, SkFont font, bool is_super_text) {
+std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, std::string text, SkFont font, SkColor color) {
 	SkFontMetrics m;
 	font.getMetrics(&m);
 	// todo: leading?
 	float bottom = top + m.fDescent - m.fAscent;
-	return std::make_shared<DrawText>(left, top, left + width, bottom, text, font, is_super_text);
+	return std::make_shared<DrawText>(left, top, left + width, bottom, text, font, color);
 }
 
 void DrawText::execute(float scroll, SkCanvas& canvas) {
 	SkPaint paint;
-	paint.setColor(SK_ColorBLACK);
+	paint.setColor(color);
 	canvas.drawString(text.c_str(), left, top - scroll, font, paint);
 }
 
@@ -93,7 +114,7 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 		}
 	}();
 	SkFont font(typeface, size);
-	m_fonts.insert({info, font});
+	m_fonts[info] = font;
 	return m_fonts[info];
 }
 
@@ -172,7 +193,7 @@ LayoutMode BlockLayout::layout_mode() const {
 
 constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 
-void BlockLayout::layout(FontCache& font_cache, bool right_align) {
+void BlockLayout::layout(FontCache& font_cache) {
 	m_x = m_parent.lock()->m_x;
 	m_width = m_parent.lock()->m_width;
 	if (m_nodes[0]->type == NodeType::Element) {
@@ -233,15 +254,15 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 		}
 	} else if (mode == LayoutMode::Inline) {
 		for (auto const& node : m_nodes) {
-			recurse(*node, font_cache, right_align);
+			recurse(*node, font_cache);
 		}
-		flush(right_align);
+		flush();
 	} else {
 		assert(false && "unreachable");
 	}
 
 	for (auto child : m_children) {
-		child->layout(font_cache, right_align);
+		child->layout(font_cache);
 	}
 
 	if (mode == LayoutMode::Block) {
@@ -258,15 +279,21 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 		if (node->type == NodeType::Element) {
 			auto element = static_cast<Element const&>(*node);
 			if (element.tag == "nav") {
+				// todo: change all finds to contains if appropriate
+				// todo: implement class selectors?
 				if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
-					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorLTGRAY);
+					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, name_to_color("lightgray"));
 					commands.push_back(rect);
 				}
 			}
-			if (element.tag == "pre") {
-				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
+
+			auto bgcolor_iter = element.styles.find("background-color");
+			std::string bgcolor = (bgcolor_iter != element.styles.end()) ? bgcolor_iter->second : std::string{ "transparent" };
+			if (bgcolor != "transparent") {
+				auto rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, name_to_color(bgcolor));
 				commands.push_back(rect);
 			}
+
 			if (element.tag == "li") {
 				constexpr float LI_BULLET_SIZE = ((float)VSTEP) / 3.0;
 				constexpr float VERTICAL_SPACING = VSTEP - LI_BULLET_SIZE;
@@ -282,83 +309,53 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 		}
 	}
 	for (auto const& pos : m_display_list) {
-		auto cmd = DrawText::create(pos.left, pos.top, pos.width, pos.text, pos.font, pos.is_super_text);
+		auto cmd = DrawText::create(pos.left, pos.top, pos.width, pos.text, pos.font, pos.color);
 		commands.push_back(cmd);
 	}
 }
 
-void BlockLayout::recurse(Node const& node, FontCache& font_cache, bool right_align) {
+void BlockLayout::recurse(Node const& node, FontCache& font_cache) {
 	if (node.type == NodeType::Text) {
 		Text const& text = static_cast<Text const&>(node);
 
-		SkFont &font = font_cache.get_font(m_size, m_is_bold, m_is_italic);
+		bool is_bold = false;
+		if (node.styles.find("font-weight")->second == "bold") {
+			is_bold = true;
+		}
+
+		bool is_italic = false;
+		if (node.styles.find("font-style")->second == "italic") {
+			is_italic = true;
+		}
+
+		std::string_view size_str { node.styles.find("font-size")->second };
+		size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
+
+		SkFont &font = font_cache.get_font(size, is_bold, is_italic);
 		std::vector<std::string_view> words = split_on_any(text.text);
 		for (auto w : words) {
 			w = trim_whitespace(w);
 			if (w != "") {
-				word(w, font, right_align);
+				word(w, node, font);
 			}
 		}
 	} else if (node.type == NodeType::Element) {
 		Element const& element = static_cast<Element const&>(node);
-		open_tag(element, right_align);
-		for (auto const& child : node.children) {
-			recurse(*child, font_cache, right_align);
+		if (element.tag == "br") {
+			flush();
 		}
-		close_tag(element, right_align);
+		for (auto const& child : node.children) {
+			recurse(*child, font_cache);
+		}
 	} else {
 		assert(false && "unreachable");
 	}
 }
 
-void BlockLayout::open_tag(Element const& element, bool right_align) {
-	if (element.tag == "i") {
-		m_is_italic = true;
-	} else if (element.tag == "b") {
-		m_is_bold = true;
-	} else if (element.tag == "small") {
-		m_size -= 2;
-	} else if (element.tag == "big") {
-		m_size += 4;
-	} else if (element.tag == "br") {
-		flush(right_align);
-	} else if (element.tag == "p") {
-	} else if (element.tag == "h1") {
-		// todo: remove. this is non-standard
-		if (auto f = element.attributes.find("class"); f != element.attributes.end() && f->second == "title") {
-			flush(right_align);
-			m_in_title = true;
-		}
-	} else if (element.tag == "sup") {
-		m_in_sup = true;
-		// todo: halving text looks stupid, but it is probably an ascent related issue 
-		m_size -= 2;
-	}
-	// no more recognized tags
-}
-void BlockLayout::close_tag(Element const& tag, bool right_align) {
-	if (tag.tag == "i") {
-		m_is_italic = false;
-	} else if (tag.tag == "b") {
-		m_is_bold = false;
-	} else if (tag.tag == "small") {
-		m_size += 2;
-	} else if (tag.tag == "big") {
-		m_size -= 4;
-	} else if (tag.tag == "p") {
-		flush(right_align);
-		m_cursor_y += VSTEP;
-	} else if (tag.tag == "h1") {
-		flush(right_align);
-		m_in_title = false;
-	} else if (tag.tag == "sup") {
-		m_in_sup = false;
-		m_size += 2;
-	}
-	// no more recognized tags
-}
+void BlockLayout::word(std::string_view word, Node const& node, SkFont& font) {
+	std::string_view color_str = node.styles.find("color")->second;
+	SkColor color = name_to_color(color_str);
 
-void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 	// The algorithm is to split a word into its separable parts and to try and render all of the parts at once.
 	// If this fails we remove the last separable part and try again.
 	//   We keep track of these parts to be rendered later (on a new line).
@@ -391,6 +388,7 @@ void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 				.text = std::move(word_to_render),
 				.font = font,
 				.is_super_text = m_in_sup,
+				.color = color,
 			};
 			m_line.push_back(pos);
 
@@ -400,7 +398,7 @@ void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 			// Optimization: If there is more work, it is because this line is full, so we must flush anyway!
 			// This prevents us from trying to split the remaining string over and over when none of it will fit.
 			if (!hyphens_to_render_later.empty()) {
-				flush(right_align);
+				flush();
 			}
 			// When there are no leftovers here we will exit the loop.
 			soft_hyphen_split = hyphens_to_render_later;
@@ -411,7 +409,7 @@ void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 			hyphens_to_render_later.insert(hyphens_to_render_later.begin(), v);
 		} else {
 			// The word didn't fit and we couldn't split it, so we flush and try the next line.
-			flush(right_align);
+			flush();
 			soft_hyphen_split.insert(soft_hyphen_split.end(), hyphens_to_render_later.begin(), hyphens_to_render_later.end());
 			hyphens_to_render_later = {};
 		}
@@ -422,7 +420,7 @@ void BlockLayout::word(std::string_view word, SkFont& font, bool right_align) {
 	}
 }
 
-void BlockLayout::flush(bool right_align) {
+void BlockLayout::flush() {
 	if (m_line.empty()) {
 		return;
 	}
@@ -450,6 +448,8 @@ void BlockLayout::flush(bool right_align) {
 		}
 	}
 
+	// todo: reintroduce support for centering and right aligning text
+	/*
 	if (m_in_title || right_align) {
 		auto const& w = m_line.back();
 		float right_side_gap = (float) m_width - w.left - w.width - (float) HSTEP;
@@ -459,6 +459,7 @@ void BlockLayout::flush(bool right_align) {
 			pos.left += change;
 		}
 	}
+	*/
 
 	auto descents = std::views::transform(metrics, &SkFontMetrics::fDescent);
 	float max_descent = std::ranges::max(descents);
@@ -474,15 +475,12 @@ void BlockLayout::flush(bool right_align) {
 	m_cursor_x = 0;
 	m_display_list.insert(m_display_list.end(), m_line.begin(), m_line.end());
 	m_line = {};
-	assert(m_cursor_y + VSTEP >= m_must_render_up_to_y);
-	m_must_render_up_to_y = m_cursor_y + VSTEP;
 }
 
-DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width, bool right_align)
+DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width)
 	: LayoutBase(std::vector{node}, std::weak_ptr<LayoutBase>())
 	, m_font_cache(font_cache)
 	, m_screen_width(screen_width)
-	, m_right_align(right_align)
 {}
 
 void DocumentLayout::layout() {
@@ -493,7 +491,7 @@ void DocumentLayout::layout() {
 	m_x = HSTEP;
 	m_y = VSTEP;
 	m_width = m_screen_width - 2 * HSTEP;
-	child->layout(m_font_cache, m_right_align);
+	child->layout(m_font_cache);
 	m_height = child->m_height;
 }
 

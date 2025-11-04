@@ -3,8 +3,7 @@
 #include <vector>
 #include <unordered_map>
 
-#include "utils.hpp"
-#include "html_parser.hpp"
+#include "parsers.hpp"
 #include "include/core/SkFont.h"
 #include "include/core/SkCanvas.h"
 
@@ -25,14 +24,13 @@ struct DrawText : public DrawCommand {
 	std::string text;
 	// todo: is copying this around cheap?
 	SkFont font;
-	// todo: find a way to remove, we only use this during layout
-	bool is_super_text;
+	SkColor color;
 
-	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, SkFont font, bool is_super_text = false);
+	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, SkFont font, SkColor color);
 
 	void execute(float scroll, SkCanvas& canvas);
 
-	DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, bool is_super_text);
+	DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, SkColor color);
 };
 
 struct DrawRect : public DrawCommand {
@@ -112,34 +110,28 @@ struct StringPosition {
 	std::string text;
 	SkFont font;
 	bool is_super_text;
+	SkColor color;
 };
 
 class BlockLayout : public LayoutBase {
 	std::vector<StringPosition> m_display_list;
 	float m_cursor_x = 0;
 	float m_cursor_y = 0;
-	// todo: adjust to 0?
-	float m_must_render_up_to_y = VSTEP;
-	bool m_is_bold = false;
-	bool m_is_italic = false;
 	bool m_in_title = false;
 	bool m_in_sup = false;
-	int m_size = 12;
 	std::vector<StringPosition> m_line;
 
 	std::weak_ptr<BlockLayout> m_previous;
 
 public:
 	BlockLayout(std::vector<std::shared_ptr<Node>> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
-	void layout(FontCache& font_cache, bool right_align);
+	void layout(FontCache& font_cache);
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 
 private:
-	void recurse(Node const& tok, FontCache& font_cache, bool right_align);
-	void open_tag(Element const& tag, bool right_align);
-	void close_tag(Element const& tag, bool right_align);
-	void word(std::string_view word, SkFont& font, bool right_align);
-	void flush(bool right_align);
+	void recurse(Node const& node, FontCache& font_cache);
+	void word(std::string_view word, Node const& node, SkFont& font);
+	void flush();
 	LayoutMode layout_mode() const;
 };
 
@@ -148,10 +140,9 @@ class DocumentLayout : public LayoutBase {
 	// todo: can we just pass these in as well?
 	FontCache& m_font_cache;
 	int m_screen_width;
-	bool m_right_align;
 
 public:
-	DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width, bool right_align);
+	DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width);
 	void layout();
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 };

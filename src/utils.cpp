@@ -2,6 +2,8 @@
 
 #include "utils.hpp"
 
+#include <algorithm>
+
 // from Boost
 void combine_hash(size_t &seed, size_t value) {
 	seed ^= (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
@@ -100,4 +102,8 @@ void unescape_sequence(std::string_view source, size_t &offset, std::string &out
 		}
 	}
 	output_buffer.push_back('&');
+}
+
+void make_lowercase(std::string& s) {
+	std::transform(s.begin(), s.end(), s.begin(), [](char c) { return std::tolower(c); });
 }

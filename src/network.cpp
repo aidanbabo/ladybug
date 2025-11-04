@@ -138,6 +138,35 @@ std::optional<URL> URL::create(std::string_view string) {
 	};
 }
 
+std::optional<URL> URL::resolve(std::string_view url_) {
+	if (url_.find("://") != std::string::npos) {
+		return URL::create(url_);
+	}
+	std::string url { url_ };
+	if (!url.starts_with('/')) {
+		size_t dir_end = path.rfind("/");
+		std::string_view dir { path.substr(0, dir_end) };
+
+		while (url.starts_with("../")) {
+			size_t new_url_start = url.find("/");
+			assert(new_url_start != std::string::npos);
+			url = url.substr(new_url_start);
+			if (dir.find("/") != std::string::npos) {
+				dir_end = path.rfind("/");
+				dir = dir.substr(0, dir_end);
+			}
+		}
+
+		url.insert(0, "/");
+		url.insert(0, dir);
+	}
+	if (url.starts_with("//")) {
+		return URL::create(scheme + "://" + url);
+	} else {
+		return URL::create(scheme + "://" + host + ":" + std::to_string(port) + url);
+	}
+}
+
 bool URL::operator==(const URL& other) const noexcept {
 	return view_source == other.view_source && scheme == other.scheme && host == other.host && port == other.port && path == other.path;
 }
@@ -369,6 +398,7 @@ public:
 						std::transform(header_name.begin(), header_name.end(), header_name.begin(), ::tolower);
 
 						header_value = trim_whitespace(header_value);
+						// todo: what to do if the same header has multiple values
 						response.headers.insert({header_name, std::string{header_value}});
 					}
 				} else {

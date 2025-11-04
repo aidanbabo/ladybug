@@ -6,6 +6,16 @@
 // todo: Exercise 5-4: Table of contents -> seems like not a real thing? maybe a real use case will appear later on?
 // todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
 
+// todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
+// todo: reimplement <p> extra spacing afterward now that we are using stylesheets instead of code
+//
+//
+//
+//
+//  TODO: add more colors and fix inline style parsing to that it doesn't just split on spaces :(
+//
+//
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
@@ -21,6 +31,7 @@
 #include "include/ports/SkFontMgr_directory.h"
 
 #include <cctype>
+#include <iostream>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <zlib.h>
@@ -30,6 +41,7 @@
 #include <cstdlib>
 #include <ctime>
 
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +53,7 @@ int const SCROLL_STEP = 100;
 #include "layout.hpp"
 #include "network.hpp"
 #include "utils.hpp"
+#include "parsers.hpp"
 
 void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Texture *&texture, sk_sp<SkSurface> &root_surface, SkImageInfo &info) {
 	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, width, height);
@@ -52,6 +65,12 @@ void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Textu
 	assert(root_surface);
 }
 
+void tree_to_list(std::shared_ptr<Node> node, std::vector<std::shared_ptr<Node>>& list) {
+	list.push_back(node);
+	for (auto const& c : node->children) {
+		tree_to_list(c, list);
+	}
+}
 
 class Browser {
 	SDL_Window *m_window;
@@ -65,12 +84,11 @@ class Browser {
 	// todo: rename?
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list;
 	FontCache m_font_cache;
+	StyleSheet m_default_style_sheet;
 
 	int m_scroll = 0;
 	int m_width = INITIAL_WIDTH;
 	int m_height = INITIAL_HEIGHT;
-	// todo: make a cli arg! find a library for this!
-	bool m_right_align = false;
 
 public:
 	static std::optional<Browser> create() {
@@ -92,6 +110,7 @@ public:
 		// this doesn't ever want to seem to work so full paths it is
 		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
 		assert(font_mgr);
+		// todo: make from stream and use relative paths
 		sk_sp<SkTypeface> normal      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman.ttf");
 		sk_sp<SkTypeface> bold        = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Bold.ttf");
 		sk_sp<SkTypeface> italic      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Italic.ttf");
@@ -110,14 +129,65 @@ public:
 
 		FontCache font_cache = FontCache(times_new_roman);
 
-		return Browser(window, renderer, texture, root_surface, info, font_mgr, font_cache);
+		std::ifstream default_css_file("styles/browser.css", std::ios::binary);
+		std::string default_css_str = std::string(std::istreambuf_iterator<char>(default_css_file), std::istreambuf_iterator<char>());
+		std::optional<StyleSheet> default_css { CSSParser(default_css_str).parse() };
+		assert(default_css.has_value());
+
+		return Browser(window, renderer, texture, root_surface, info, font_mgr, font_cache, *default_css);
 	}
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
 		m_nodes = HTMLParser(body).parse();
-		//print_node(*m_nodes);
-		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width, m_right_align);
+		assert(m_nodes->type == NodeType::Element);
+		// todo: there is supposed to be a copy here does this happen ?
+		StyleSheet rules = m_default_style_sheet;
+		std::vector<std::shared_ptr<Node>> nodes;
+		tree_to_list(m_nodes, nodes);
+		std::vector<std::string> links;
+		for (auto const& node : nodes) {
+			if (node->type != NodeType::Element) {
+				continue;
+			}
+			auto element = static_cast<Element const&>(*node);
+			if (element.tag != "link") {
+				continue;
+			}
+			auto rel = element.attributes.find("rel");
+			if (rel == element.attributes.end() || rel->second != "stylesheet") {
+				continue;
+			}
+			if (!element.attributes.contains("href")) {
+				continue;
+			}
+			links.push_back(element.attributes["href"]);
+		}
+
+		for (auto const& link : links) {
+			auto style_url = url.resolve(link);
+			if (!style_url) {
+				std::cerr << "Skipping malformed url: '" << link << "'" << std::endl;
+				continue;
+			}
+
+			// todo: handle errors fr
+			auto body = cm.request(*style_url);
+			auto sh = CSSParser(body).parse();
+			if (!sh) {
+				std::cerr << "Improper stylesheet at: '" << link << "'" << std::endl;
+				continue;
+			}
+			rules.rules.insert(rules.rules.end(), sh->rules.begin(), sh->rules.end());
+		}
+
+		// stable sort so file order breaks the rule (first file first!)
+		std::ranges::stable_sort(rules.rules, {}, [](auto p) {
+			return p.first->priority;
+		});
+		m_nodes->style(rules);
+		print_node(*m_nodes);
+		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width);
 		m_layout->layout();
 		//m_layout->print_layout();
 		m_display_list.clear();
@@ -172,7 +242,7 @@ public:
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width, m_right_align);
+		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width);
 		m_layout->layout();
 		m_display_list.clear();
 		paint_tree(*m_layout, m_display_list);
@@ -221,7 +291,8 @@ private:
 		sk_sp<SkSurface> root_surface,
 		SkImageInfo surface_info,
 		sk_sp<SkFontMgr> font_mgr,
-		FontCache font_cache
+		FontCache font_cache,
+		StyleSheet sheet
 	)
 		: m_window(window)
 		, m_renderer(renderer)
@@ -232,6 +303,7 @@ private:
 		, m_layout()
 		, m_display_list()
 		, m_font_cache(font_cache)
+		, m_default_style_sheet(sheet)
 	{}
 };
 
@@ -246,7 +318,7 @@ int main(int argc, char** argv) {
 		SDL_Quit();
 		return 1;
 	}
-	Browser browser = b.value();
+	Browser browser { b.value() };
 
 	network_init();
 

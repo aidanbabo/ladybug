@@ -13,3 +13,4 @@ std::vector<std::string_view> split_on_any(std::string_view s, std::string_view 
 
 std::string escape(std::string_view source);
 void unescape_sequence(std::string_view source, size_t &offset, std::string &output_buffer);
+void make_lowercase(std::string& s);

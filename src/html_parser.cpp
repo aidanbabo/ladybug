@@ -1,4 +1,4 @@
-#include "html_parser.hpp"
+#include "parsers.hpp"
 #include "utils.hpp"
 
 #include <array>
@@ -10,15 +10,76 @@
 constexpr std::array SELF_CLOSING_TAGS = { "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
 constexpr std::array HEAD_TAGS = { "base", "basefont", "bgsound", "noscript", "link", "meta", "title", "style", "script" };
 
-Node::Node(std::weak_ptr<Node> parent, NodeType type) : children(), parent(parent), type(type) {}
-
-Text::Text(std::weak_ptr<Node> parent, std::string text) : Node(parent, NodeType::Text), text(text) {}
-
-Element::Element(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes) 
-	: Node(parent, NodeType::Element)
-	  , tag(tag)
-	  , attributes(attributes)
+Node::Node(std::weak_ptr<Node> parent, NodeType type)
+	: children()
+	, parent(parent)
+	, type(type)
 {}
+
+Text::Text(std::weak_ptr<Node> parent, std::string text)
+	: Node(parent, NodeType::Text)
+	, text(text)
+{}
+
+Element::Element(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes)
+	: Node(parent, NodeType::Element)
+	, tag(tag)
+	, attributes(attributes)
+{}
+
+static const std::unordered_map<std::string_view, std::string_view> INHERITIED_PROPERTIES = {
+	{ "font-size", "16px" },
+	{ "font-style", "normal" },
+	{ "font-weight", "normal" },
+	{ "color", "black" },
+};
+
+void Node::style(StyleSheet const& sheet) {
+	for (auto const& [property, default_value] : INHERITIED_PROPERTIES) {
+		if (auto p = parent.lock()) {
+			styles[std::string{property}] = p->styles[std::string{property}];
+		} else {
+			styles[std::string{property}] = std::string{default_value};
+		}
+	}
+	for (auto const& [selector, body] : sheet.rules) {
+		if (!selector->matches(*this)) continue;
+		for (auto [p, v] : body) {
+			styles[p] = v;
+		}
+	}
+	if (type == NodeType::Element) {
+		auto element = static_cast<Element const&>(*this);
+		if (auto styles_text = element.attributes.find("style"); styles_text != element.attributes.end()) {
+			auto pairs = CSSParser(styles_text->second).body();
+			if (pairs) {
+				for (auto [p, v] : *pairs) {
+					styles[p] = v;
+				}
+			}
+		}
+	}
+
+	if (styles["font-size"].ends_with("%")) {
+		std::string size;
+		if (auto p = parent.lock()) {
+			size = p->styles["font-size"];
+		} else {
+			// if root, we do default font size
+			size = std::string{INHERITIED_PROPERTIES.find("font-size")->second};
+		}
+		auto fsize_str = styles["font-size"];
+		// chop of %
+		auto node_pct = std::stof(fsize_str.substr(0, fsize_str.size() - 1)) / 100.0;
+		// chop of px
+		auto parent_px = std::stof(size.substr(0, size.size() - 2));
+		styles["font-size"] = std::to_string(node_pct * parent_px) + "px";
+	}
+
+	for (auto& child : children) {
+		child->style(sheet);
+	}
+}
 
 HTMLParser::HTMLParser(std::string body)
 	: m_body(body)
@@ -70,7 +131,7 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 	std::vector<std::string_view> parts = split_on_any(text);
 	std::string tag { parts[0] };
 	// casefold :( localization
-	std::transform(tag.begin(), tag.end(), tag.begin(), [](char c) { return std::tolower(c); });
+	make_lowercase(tag);
 
 	std::unordered_map<std::string, std::string> attributes;
 	for (size_t i = 1; i < parts.size(); i++) {
@@ -86,11 +147,11 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 				value.pop_back();
 			}
 
-			attributes.insert({key, value});
+			attributes[key] = value;
 		} else {
 			std::string key { part };
 			std::transform(key.begin(), key.end(), key.begin(), [](char c) { return std::tolower(c); });
-			attributes.insert({key, ""});
+			attributes[key] = std::string{};
 		}
 	}
 	return { tag, attributes };
@@ -227,11 +288,17 @@ void print_node(Node const& node, int indent) {
 	}
 	if (node.type == NodeType::Text) {
 		auto text = static_cast<Text const&>(node);
-		std::cout << text.text << std::endl;;
+		std::cout << text.text;
 	} else if (node.type == NodeType::Element) {
 		auto tag = static_cast<Element const&>(node);
-		std::cout << "<" << tag.tag << ">" << std::endl;;
+		std::cout << "<" << tag.tag << ">";
 	}
+
+	std::cout << "{";
+	for (auto const& [prop, value] : node.styles) {
+		std::cout << prop << ":" << value << ",";
+	}
+	std::cout << std::endl;
 
 	for (auto const& child : node.children) {
 		print_node(*child, indent + 2);

@@ -1,3 +1,4 @@
+#pragma once
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -14,6 +15,7 @@ struct URL {
 	std::string path;
 
 	static std::optional<URL> create(std::string_view string);
+	std::optional<URL> resolve(std::string_view url);
 
 // todo: i want these to be module-private
 	bool operator==(const URL& other) const noexcept;

@@ -29,5 +29,6 @@ Some of the exercises have been done, only the ones I find technically interesti
     - Has a barebones HTTP cache and keep alive connections.
 - Renders a small (but the essential) subset of HTML content to the screen.
     - Supports basic text styling with `<b>`, `<i>`, `<sup>` and others.
+    - Loads CSS from remote sources and implements the cascade.
 - Scrolling and resizing the window
     - Scrolling via the mousewheel is a little chunky. My mouse wheel doesn't work so testing is difficult. Use the arrow keys.
