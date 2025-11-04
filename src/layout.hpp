@@ -94,11 +94,11 @@ public:
 	float m_width = -1;
 	float m_height = -1;
 
-	std::shared_ptr<Node> m_node;
+	std::vector<std::shared_ptr<Node>> m_nodes;
 	std::weak_ptr<LayoutBase> m_parent;
 	std::vector<std::shared_ptr<BlockLayout>> m_children;
 
-	LayoutBase(std::shared_ptr<Node> node, std::weak_ptr<LayoutBase> parent);
+	LayoutBase(std::vector<std::shared_ptr<Node>> nodes, std::weak_ptr<LayoutBase> parent);
 	void print_layout(int indent = 0);
 	virtual void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const = 0;
 	virtual ~LayoutBase() = default;
@@ -130,7 +130,7 @@ class BlockLayout : public LayoutBase {
 	std::weak_ptr<BlockLayout> m_previous;
 
 public:
-	BlockLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
+	BlockLayout(std::vector<std::shared_ptr<Node>> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
 	void layout(FontCache& font_cache, bool right_align);
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 

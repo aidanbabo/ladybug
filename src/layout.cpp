@@ -97,8 +97,8 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 	return m_fonts[info];
 }
 
-LayoutBase::LayoutBase(std::shared_ptr<Node> node, std::weak_ptr<LayoutBase> parent)
-	: m_node(node)
+LayoutBase::LayoutBase(std::vector<std::shared_ptr<Node>> nodes, std::weak_ptr<LayoutBase> parent)
+	: m_nodes(nodes)
 	, m_parent(parent)
 {}
 
@@ -108,23 +108,37 @@ void LayoutBase::print_layout(int indent) {
 	}
 	std::cout << "{x:" << m_x << ",y:" << m_y << ",w:" << m_width << ",h:" << m_height << "} ";
 
-	if (m_node->type == NodeType::Text) {
-		auto text = static_cast<Text const&>(*m_node);
-		std::cout << text.text << std::endl;;
-	} else if (m_node->type == NodeType::Element) {
-		auto tag = static_cast<Element const&>(*m_node);
-		std::cout << "<" << tag.tag << ">" << std::endl;;
+	for (auto node : m_nodes) {
+		if (node->type == NodeType::Text) {
+			auto text = static_cast<Text const&>(*node);
+			std::cout << text.text << std::endl;;
+		} else if (node->type == NodeType::Element) {
+			auto tag = static_cast<Element const&>(*node);
+			std::cout << "<" << tag.tag << ">" << std::endl;;
+		}
 	}
 
 	for (auto const& child : m_children) {
 		child->print_layout(indent + 2);
 	}
 }
-BlockLayout::BlockLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous)
-	: LayoutBase(node, parent)
+
+constexpr std::array TEXT_LIKE_ELEMENTS = { "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
+
+BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous)
+	: LayoutBase(nodes, parent)
 	, m_previous(previous)
 {
 	assert(!m_parent.expired());
+	if (m_nodes.size() > 1) {
+		for (auto const& node : m_nodes) {
+			if (node->type != NodeType::Element) {
+				continue;
+			}
+			auto element = static_cast<Element const&>(*node);
+			assert(std::find(TEXT_LIKE_ELEMENTS.begin(), TEXT_LIKE_ELEMENTS.end(), element.tag) != TEXT_LIKE_ELEMENTS.end() && "if there are multiple element children they must all be text like");
+		}
+	}
 }
 
 constexpr std::array BLOCK_ELEMENTS = {
@@ -137,18 +151,20 @@ constexpr std::array BLOCK_ELEMENTS = {
 };
 
 LayoutMode BlockLayout::layout_mode() const {
-	if (m_node->type == NodeType::Text) {
+	if (std::ranges::all_of(m_nodes, [](std::shared_ptr<Node> n) { return n->type == NodeType::Text; })) {
 		return LayoutMode::Inline;
 	}
-	for (auto const& child : m_node->children) {
-		if (child->type == NodeType::Element) {
-			auto element = static_cast<Element const&>(*child);
-			if (std::find(BLOCK_ELEMENTS.begin(), BLOCK_ELEMENTS.end(), element.tag) != BLOCK_ELEMENTS.end()) {
-				return LayoutMode::Block;
+	for (auto const& node : m_nodes) {
+		for (auto const& child : node->children) {
+			if (child->type == NodeType::Element) {
+				auto element = static_cast<Element const&>(*child);
+				if (std::find(BLOCK_ELEMENTS.begin(), BLOCK_ELEMENTS.end(), element.tag) != BLOCK_ELEMENTS.end()) {
+					return LayoutMode::Block;
+				}
 			}
 		}
 	}
-	if (!m_node->children.empty()) {
+	if (std::ranges::all_of(m_nodes, [](std::shared_ptr<Node> n) { return !n->children.empty(); })) {
 		return LayoutMode::Inline;
 	}
 	return LayoutMode::Block;
@@ -159,8 +175,9 @@ constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 	m_x = m_parent.lock()->m_x;
 	m_width = m_parent.lock()->m_width;
-	if (m_node->type == NodeType::Element) {
-		if (auto element = static_cast<Element const&>(*m_node); element.tag == "li") {
+	if (m_nodes[0]->type == NodeType::Element) {
+		if (auto element = static_cast<Element const&>(*m_nodes[0]); element.tag == "li") {
+			assert(m_nodes.size() == 1 && "layout isn't shared between li");
 			m_x += LI_BULLET_SPACING;
 			m_width -= LI_BULLET_SPACING;
 		}
@@ -174,18 +191,50 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 
 	LayoutMode mode = layout_mode();
 	if (mode == LayoutMode::Block) {
+		assert(m_nodes.size() == 1 && "block layout can't have multiple children");
 		std::shared_ptr<LayoutBase> shared = shared_from_this();
 		std::weak_ptr<BlockLayout> previous;
-		for (auto const& child : m_node->children) {
+		std::vector<std::shared_ptr<Node>> nodes;
+		for (auto const& child : m_nodes[0]->children) {
 			if (child->type == NodeType::Element && static_cast<Element const&>(*child).tag == "head") {
 				continue;
 			}
-			auto next = std::make_shared<BlockLayout>(child, shared, previous);
+
+			switch (child->type) {
+			case NodeType::Text: {
+				nodes.push_back(child);
+				break;
+			}
+			case NodeType::Element: {
+				auto element = static_cast<Element const&>(*child);
+				if (std::find(TEXT_LIKE_ELEMENTS.begin(), TEXT_LIKE_ELEMENTS.end(), element.tag) == TEXT_LIKE_ELEMENTS.end()) {
+					if (!nodes.empty()) {
+						auto next = std::make_shared<BlockLayout>(nodes, shared, previous);
+						m_children.push_back(next);
+						previous = next;
+						nodes.clear();
+					}
+					auto next = std::make_shared<BlockLayout>(std::vector{ child }, shared, previous);
+					m_children.push_back(next);
+					previous = next;
+				} else {
+					nodes.push_back(child);
+				}
+				break;
+			}
+			default: {
+				assert(false && "unreachable");
+			}
+			}
+		}
+		if (!nodes.empty()) {
+			auto next = std::make_shared<BlockLayout>(nodes, shared, previous);
 			m_children.push_back(next);
-			previous = next;
 		}
 	} else if (mode == LayoutMode::Inline) {
-		recurse(*m_node, font_cache, right_align);
+		for (auto const& node : m_nodes) {
+			recurse(*node, font_cache, right_align);
+		}
 		flush(right_align);
 	} else {
 		assert(false && "unreachable");
@@ -205,29 +254,31 @@ void BlockLayout::layout(FontCache& font_cache, bool right_align) {
 }
 
 void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
-	if (m_node->type == NodeType::Element) {
-		auto element = static_cast<Element const&>(*m_node);
-		if (element.tag == "nav") {
-			if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
-				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorLTGRAY);
+	for (auto const& node : m_nodes) {
+		if (node->type == NodeType::Element) {
+			auto element = static_cast<Element const&>(*node);
+			if (element.tag == "nav") {
+				if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
+					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorLTGRAY);
+					commands.push_back(rect);
+				}
+			}
+			if (element.tag == "pre") {
+				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
 				commands.push_back(rect);
 			}
-		}
-		if (element.tag == "pre") {
-			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, SK_ColorGRAY);
-			commands.push_back(rect);
-		}
-		if (element.tag == "li") {
-			constexpr float LI_BULLET_SIZE = ((float)VSTEP) / 3.0;
-			constexpr float VERTICAL_SPACING = VSTEP - LI_BULLET_SIZE;
-			constexpr float HORIZONTAL_SPACING = LI_BULLET_SPACING - LI_BULLET_SIZE;
-			std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(
-				m_x - 0.5 * HORIZONTAL_SPACING - LI_BULLET_SIZE,
-				m_y + 0.5 * VERTICAL_SPACING,
-				m_x - 0.5 * HORIZONTAL_SPACING,
-				m_y + 0.5 * VERTICAL_SPACING + LI_BULLET_SIZE,
-				SK_ColorBLACK);
-			commands.push_back(rect);
+			if (element.tag == "li") {
+				constexpr float LI_BULLET_SIZE = ((float)VSTEP) / 3.0;
+				constexpr float VERTICAL_SPACING = VSTEP - LI_BULLET_SIZE;
+				constexpr float HORIZONTAL_SPACING = LI_BULLET_SPACING - LI_BULLET_SIZE;
+				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(
+					m_x - 0.5 * HORIZONTAL_SPACING - LI_BULLET_SIZE,
+					m_y + 0.5 * VERTICAL_SPACING,
+					m_x - 0.5 * HORIZONTAL_SPACING,
+					m_y + 0.5 * VERTICAL_SPACING + LI_BULLET_SIZE,
+					SK_ColorBLACK);
+				commands.push_back(rect);
+			}
 		}
 	}
 	for (auto const& pos : m_display_list) {
@@ -428,7 +479,7 @@ void BlockLayout::flush(bool right_align) {
 }
 
 DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width, bool right_align)
-	: LayoutBase(node, std::weak_ptr<LayoutBase>())
+	: LayoutBase(std::vector{node}, std::weak_ptr<LayoutBase>())
 	, m_font_cache(font_cache)
 	, m_screen_width(screen_width)
 	, m_right_align(right_align)
@@ -436,7 +487,8 @@ DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache
 
 void DocumentLayout::layout() {
 	std::shared_ptr<LayoutBase> shared = shared_from_this();
-	auto child = std::make_shared<BlockLayout>(m_node, shared, std::weak_ptr<BlockLayout>());
+	assert(m_nodes.size() == 1);
+	auto child = std::make_shared<BlockLayout>(m_nodes, shared, std::weak_ptr<BlockLayout>());
 	m_children.push_back(child);
 	m_x = HSTEP;
 	m_y = VSTEP;
