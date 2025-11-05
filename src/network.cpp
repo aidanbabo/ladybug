@@ -396,7 +396,7 @@ public:
 
 						std::string header_name { header_split[0] };
 						std::string_view header_value = header_split[1];
-						std::transform(header_name.begin(), header_name.end(), header_name.begin(), ::tolower);
+						make_lowercase(header_name);
 
 						header_value = trim_whitespace(header_value);
 						// todo: what to do if the same header has multiple values

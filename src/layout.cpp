@@ -391,6 +391,10 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache) {
 		for (auto const& child : node.children) {
 			recurse(*child, font_cache);
 		}
+		if (element.tag == "p") {
+			// todo: move to css?
+			m_cursor_y += VSTEP;
+		}
 	} else {
 		assert(false && "unreachable");
 	}

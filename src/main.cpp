@@ -7,7 +7,6 @@
 // todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
-// todo: reimplement <p> extra spacing afterward now that we are using stylesheets instead of code
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -23,11 +22,7 @@
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
 
-#include <cctype>
 #include <iostream>
-#include <openssl/ssl.h>
-#include <openssl/err.h>
-#include <zlib.h>
 
 #include <cassert>
 #include <cstring>
