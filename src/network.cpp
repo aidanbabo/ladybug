@@ -193,6 +193,7 @@ URL URL::cachable_subsection() const {
 	};
 }
 
+// todo: operator overload
 std::string URL::to_string() const {
 	const char *source = (view_source) ? "view-source:" : "";
 	return source + scheme + "://" + host + ":" + std::to_string(port) + path;
@@ -761,7 +762,7 @@ std::string ConnectionManager::request_http(URL url) {
 		// I wish if statements were expressions so bad
 		HttpConnection *connection = [&] {
 			if (pair == m_active_connections.end()) {
-				std::cerr << "Creating new connection for " << reusable_base.to_string() << std::endl;
+				std::cerr << "Creating new connection for " << reusable_base.to_string() << " (" << url.to_string() << ")" << std::endl;
 				bool encrypted;
 				if (url.scheme == "http") {
 					encrypted = false;
@@ -775,7 +776,7 @@ std::string ConnectionManager::request_http(URL url) {
 				HttpConnection *conn = m_active_connections[reusable_base].get();
 				return conn;
 			} else {
-				std::cerr << "Reusing connection for " << reusable_base.to_string() << std::endl;
+				std::cerr << "Reusing connection for " << reusable_base.to_string() << " (" << url.to_string() << ")" << std::endl;
 				return pair->second.get();
 			}
 		}();

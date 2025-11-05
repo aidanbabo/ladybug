@@ -127,33 +127,44 @@ void HTMLParser::add_text(std::string text) {
 }
 
 std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser::get_attributes(std::string_view text) {
-	// todo: quoted attributes
-	std::vector<std::string_view> parts = split_on_any(text);
+	std::vector<std::string_view> parts = split_on_any(text, " \t\r\n\f\v", 1);
 	std::string tag { parts[0] };
 	// casefold :( localization
 	make_lowercase(tag);
 
+	bool in_quotes = false;
+	bool parsing_prop = true;
+	std::string buf;
+	std::string prop;
 	std::unordered_map<std::string, std::string> attributes;
-	for (size_t i = 1; i < parts.size(); i++) {
-		std::string_view part = parts[i];
-		if (std::find(part.begin(), part.end(), '=') != part.end()) {
-			std::vector<std::string_view> pair = split(parts[i], "=", 1);
-			std::string key { pair[0] };
-			std::transform(key.begin(), key.end(), key.begin(), [](char c) { return std::tolower(c); });
-			std::string value { pair[1] };
+	std::string_view remainder = parts.size() > 1 ? parts[1] : std::string_view{};
+	for (char c : remainder) {
+		if (c == '"') {
+			in_quotes = !in_quotes;
+		} else if (in_quotes) {
+			buf.push_back(c);
+		} else if (c == '=') {
+			prop = buf;
+			buf.clear();
+			parsing_prop = false;
+		} else if (std::isspace(c)) {
+			parsing_prop = true;
+			make_lowercase(prop);
 
-			if (value.size() > 2 && (value[0] == '\'' || value[0] == '"')) {
-				value.erase(0, 1);
-				value.pop_back();
-			}
-
-			attributes[key] = value;
+			attributes[prop] = buf;
+			prop.clear();
+			buf.clear();
 		} else {
-			std::string key { part };
-			std::transform(key.begin(), key.end(), key.begin(), [](char c) { return std::tolower(c); });
-			attributes[key] = std::string{};
+			buf.push_back(c);
 		}
 	}
+	assert(!in_quotes);
+	if (parsing_prop) {
+		prop = buf;
+		buf.clear();
+	}
+	attributes[prop] = buf;
+
 	return { tag, attributes };
 }
 

@@ -7,15 +7,47 @@
 
 #include <cassert>
 
+#include <charconv>
 #include <iostream>
 #include <memory>
 #include <numeric>
 #include <ranges>
 
-// todo: move uses of this to earlier in parsing, throwing out bad names
-// i.e. make it return an optional and discard the styling if it isn't a valid name
-static SkColor name_to_color(std::string_view name) {
+static std::optional<SkColor> parse_hex_color(std::string_view hex) {
+	bool is_short = hex.size() == 3 || hex.size() == 4;
+	bool is_long = hex.size() == 6 || hex.size() == 8;
+	if (!(is_short || is_long)) {
+		return std::nullopt;
+	}
+	bool has_alpha = hex.size() == 4 || hex.size() == 8;
+	size_t step = is_short ? 1 : 2;
+
+	uint8_t red, green, blue, alpha = is_short ? 0x0f : 0xff;
+
+	if (std::from_chars(hex.data(), hex.data() + step, red, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	if (std::from_chars(hex.data() + step, hex.data() + 2 * step, green, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	if (std::from_chars(hex.data() + 2 * step, hex.data() + 3 * step, blue, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	if (has_alpha && std::from_chars(hex.data() + 3 * step, hex.data() + 4 * step, alpha, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	if (is_short) {
+		red |= red << 1;
+		green |= green << 1;
+		blue |= blue << 1;
+		alpha |= alpha << 1;
+	}
+	return SkColorSetARGB(alpha, red, green, blue);
+}
+
+static std::optional<SkColor> parse_color(std::string_view color) {
 	static const std::unordered_map<std::string_view, SkColor> COLOR_NAMES = {
+		{ "white", SK_ColorWHITE },
 		{ "black", SK_ColorBLACK },
 		{ "blue", SK_ColorBLUE },
 		{ "gray", SK_ColorGRAY },
@@ -25,10 +57,17 @@ static SkColor name_to_color(std::string_view name) {
 		{ "lightblue", SkColorSetRGB(0xad, 0xd8, 0xe6) },
 	};
 
-	if (auto c = COLOR_NAMES.find(name); c != COLOR_NAMES.end()) {
+	if (auto c = COLOR_NAMES.find(color); c != COLOR_NAMES.end()) {
 		return c->second;
 	}
-	return SK_ColorBLACK;
+	if (color.starts_with("#")) {
+		if (auto c = parse_hex_color(color.substr(1))) {
+			return c;
+		}
+	}
+
+	std::cerr << "Cannot parse color: '" << color << "'" << std::endl;
+	return std::nullopt;
 }
 
 
@@ -281,17 +320,22 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 			if (element.tag == "nav") {
 				// todo: change all finds to contains if appropriate
 				// todo: implement class selectors?
+				/*
 				if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
-					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, name_to_color("lightgray"));
+					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, *parse_color("lightgray"));
 					commands.push_back(rect);
 				}
+				*/
 			}
 
 			auto bgcolor_iter = element.styles.find("background-color");
 			std::string bgcolor = (bgcolor_iter != element.styles.end()) ? bgcolor_iter->second : std::string{ "transparent" };
 			if (bgcolor != "transparent") {
-				auto rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, name_to_color(bgcolor));
-				commands.push_back(rect);
+				auto color = parse_color(bgcolor);
+				if (color) {
+					auto rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, *color);
+					commands.push_back(rect);
+				}
 			}
 
 			if (element.tag == "li") {
@@ -354,7 +398,9 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache) {
 
 void BlockLayout::word(std::string_view word, Node const& node, SkFont& font) {
 	std::string_view color_str = node.styles.find("color")->second;
-	SkColor color = name_to_color(color_str);
+	// todo: discard styling if the color fails to parse
+	// this will need to be in the cascade i think
+	SkColor color = parse_color(color_str).value_or(SK_ColorBLACK);
 
 	// The algorithm is to split a word into its separable parts and to try and render all of the parts at once.
 	// If this fails we remove the last separable part and try again.
