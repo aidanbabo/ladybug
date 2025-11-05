@@ -1,3 +1,4 @@
+#include <charconv>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <zlib.h>
@@ -137,6 +138,7 @@ std::optional<URL> URL::create(std::string_view string) {
 		.path = path,
 	};
 }
+URL URL::ABOUT_BLANK = *URL::create("about:blank");
 
 std::optional<URL> URL::resolve(std::string_view url_) {
 	if (url_.find("://") != std::string::npos) {
@@ -322,14 +324,12 @@ public:
 	HttpResponse request(URL url) {
 		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
-		// todo: idk why i can't make the second paramter a string_view as well...
-		// maybe it's make_pair? it doesn't do the conversion well? idk
-		std::vector<std::pair<std::string_view, std::string>> request_headers;
-		request_headers.push_back(std::make_pair("Host", url.host));
+		std::vector<std::pair<std::string_view, std::string_view>> request_headers;
+		request_headers.push_back(std::make_pair("Host", std::string_view{url.host}));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip, deflate"));
-		for (auto pair : request_headers) {
+		for (auto const& pair : request_headers) {
 			request.append(pair.first);
 			request.append(": ");
 			request.append(pair.second);
@@ -399,7 +399,10 @@ public:
 						make_lowercase(header_name);
 
 						header_value = trim_whitespace(header_value);
-						// todo: what to do if the same header has multiple values
+						// todo: Handle multiple headers of the same value.
+						// I don't think even some HTTP packages handle this correctly, so I don't think
+						// it is a huge obstacle for browsing the web. That being said std::unordered_multimap
+						// does exist and probably isn't that much of a headach
 						response.headers.insert({header_name, std::string{header_value}});
 					}
 				} else {
@@ -678,17 +681,12 @@ void ConnectionManager::print_active_connections() const {
 }
 
 std::string ConnectionManager::load_file(URL url) const {
-	std::ifstream file(url.path);
-	if (!file.is_open()) {
-		// todo: fail to open the page
-		std::cerr << "Invalid path" << std::endl;
-		exit(1);
+	if (auto content = read_entire_file_to_string(url.path)) {
+		return *content;
+	} else {
+		// todo: Default to about:blank
+		return std::string{};
 	}
-
-	// huh, second paramater for what?
-	std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-	file.close();
-	return file_content;
 }
 
 std::string ConnectionManager::load_from_cache_or_fetch(URL url) {
@@ -733,9 +731,8 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 			return;
 		}
 
-		// this function throws on failure :(
-		// todo: no std::string
-		uint64_t max_age = std::stol(std::string{directive.substr(header_start.length())});
+		uint64_t max_age;
+		assert(std::from_chars(directive.data() + header_start.size(), directive.data() + directive.size(), max_age).ec == std::errc{});
 
 		uint64_t age = 0;
 		if (auto age_finder = response.headers.find("age"); age_finder != response.headers.end()) {
@@ -787,7 +784,7 @@ std::string ConnectionManager::request_http(URL url) {
 			if (location.rfind("/", 0) == 0) { // starts_with
 				url.path = location;
 			} else {
-				url = URL::create(location).value_or(URL::create("about:blank").value());
+				url = URL::create(location).value_or(URL::ABOUT_BLANK);
 			}
 			std::cerr << "Redirected to " << url.to_string() << std::endl;
 			continue;

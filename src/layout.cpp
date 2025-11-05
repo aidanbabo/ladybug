@@ -527,21 +527,19 @@ void BlockLayout::flush() {
 	m_line = {};
 }
 
-DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width)
+DocumentLayout::DocumentLayout(std::shared_ptr<Node> node)
 	: LayoutBase(std::vector{node}, std::weak_ptr<LayoutBase>())
-	, m_font_cache(font_cache)
-	, m_screen_width(screen_width)
 {}
 
-void DocumentLayout::layout() {
+void DocumentLayout::layout(FontCache& font_cache, float screen_width) {
 	std::shared_ptr<LayoutBase> shared = shared_from_this();
 	assert(m_nodes.size() == 1);
 	auto child = std::make_shared<BlockLayout>(m_nodes, shared, std::weak_ptr<BlockLayout>());
 	m_children.push_back(child);
 	m_x = HSTEP;
 	m_y = VSTEP;
-	m_width = m_screen_width - 2 * HSTEP;
-	child->layout(m_font_cache);
+	m_width = screen_width - 2 * HSTEP;
+	child->layout(font_cache);
 	m_height = child->m_height;
 }
 

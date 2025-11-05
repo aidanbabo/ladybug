@@ -76,6 +76,9 @@ struct TagSelector : public Selector {
 
 struct DescendantSelector : public Selector {
 	// todo: figure out unique_ptr
+	// The problem is that we can't copy this structure (StyleSheet) ever if there are unique_ptrs
+	// which is probably correct, but it is hard to deal with the compiler errors that complain about it
+	// Explicitly deleting constructors and assignment operators helps a little bit but it is a big pain.
 	std::shared_ptr<Selector> ancestor;
 	std::shared_ptr<Selector> descendant;
 

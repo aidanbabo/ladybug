@@ -29,7 +29,6 @@
 #include <cstdlib>
 #include <ctime>
 
-#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -69,7 +68,6 @@ class Browser {
 	sk_sp<SkFontMgr> m_font_mgr;
 	std::shared_ptr<Node> m_nodes;
 	std::shared_ptr<DocumentLayout> m_layout;
-	// todo: rename?
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list;
 	FontCache m_font_cache;
 	StyleSheet m_default_style_sheet;
@@ -117,19 +115,21 @@ public:
 
 		FontCache font_cache = FontCache(times_new_roman);
 
-		std::ifstream default_css_file("styles/browser.css", std::ios::binary);
-		std::string default_css_str = std::string(std::istreambuf_iterator<char>(default_css_file), std::istreambuf_iterator<char>());
-		std::optional<StyleSheet> default_css { CSSParser(default_css_str).parse() };
-		assert(default_css.has_value());
+		StyleSheet default_style_sheet{};
+		if (auto css_string = read_entire_file_to_string("styles/browser.css")) {
+			std::optional<StyleSheet> default_css { CSSParser(*css_string).parse() };
+			assert(default_css.has_value() && "invalid browser.css");
+			default_style_sheet = *default_css;
+		}
 
-		return Browser(window, renderer, texture, root_surface, info, font_mgr, font_cache, *default_css);
+		return Browser(window, renderer, texture, root_surface, info, font_mgr, font_cache, default_style_sheet);
 	}
 
 	void load(ConnectionManager& cm, URL url) {
 		std::string body = cm.request(url);
 		m_nodes = HTMLParser(body).parse();
 		assert(m_nodes->type == NodeType::Element);
-		// todo: there is supposed to be a copy here does this happen ?
+		// todo: This is supposed to be a copy (from reference) does this happen?
 		StyleSheet rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;
 		tree_to_list(m_nodes, nodes);
@@ -175,8 +175,8 @@ public:
 		});
 		m_nodes->style(rules);
 		//print_node(*m_nodes);
-		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width);
-		m_layout->layout();
+		m_layout = std::make_shared<DocumentLayout>(m_nodes);
+		m_layout->layout(m_font_cache, m_width);
 		//m_layout->print_layout();
 		m_display_list.clear();
 		paint_tree(*m_layout, m_display_list);
@@ -224,18 +224,17 @@ public:
 	}
 
 	void resize(int new_width, int new_height) {
+		// todo: recalculate sroll so we stay at the same height
 		m_width = new_width;
 		m_height = new_height;
 		SDL_DestroyTexture(m_texture);
 
 		initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
-		m_layout = std::make_shared<DocumentLayout>(m_nodes, m_font_cache, m_width);
-		m_layout->layout();
+		m_layout = std::make_shared<DocumentLayout>(m_nodes);
+		m_layout->layout(m_font_cache, m_width);
 		m_display_list.clear();
 		paint_tree(*m_layout, m_display_list);
-		// todo: do one better, make the scroll proportional to the new screen size
-		// either by making m_scroll a float, or by recalculating it on resize.
 		clamp_scroll();
 		draw();
 	}
@@ -312,11 +311,10 @@ int main(int argc, char** argv) {
 
 	auto connection_manager = ConnectionManager();
 	URL url = [&] {
-		// todo: how to make value_or lazy
 		if (argc == 1) {
-			return URL::create("file:///home/ababo/dev/browser/test_data/index.html").value_or(URL::create("about:blank").value());
+			return URL::create("file:///home/ababo/dev/browser/test_data/index.html").value_or(URL::ABOUT_BLANK);
 		} else if (argc == 2) {
-			return URL::create(argv[1]).value_or(URL::create("about:blank").value());
+			return URL::create(argv[1]).value_or(URL::ABOUT_BLANK);
 		} else {
 			assert(false && "Invalid arguments");
 		}

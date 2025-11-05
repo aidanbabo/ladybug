@@ -3,6 +3,8 @@
 #include "utils.hpp"
 
 #include <algorithm>
+#include <fstream>
+#include <iostream>
 
 // from Boost
 void combine_hash(size_t &seed, size_t value) {
@@ -22,44 +24,43 @@ std::string_view trim_whitespace(std::string_view s) {
 	return s.substr(start, end - start);
 }
 
-// todo: make more generic
 std::vector<std::string_view> split(std::string_view s, std::string_view delimiter, int nsplits) {
-	;
 	std::vector<std::string_view> items;
 	size_t start = 0;
-	// todo: make smaller
-	for (;;) {
-		size_t end_pos = s.find(delimiter, start);
-		if (end_pos == std::string_view::npos || (int) items.size() == nsplits) {
-			std::string_view item = s.substr(start);
-			items.push_back(item);
-			return items;
+	size_t end_pos;
+	do {
+		end_pos = s.find(delimiter, start);
+		if ((int) items.size() == nsplits) {
+			end_pos = std::string_view::npos;
 		}
 
 		std::string_view item = s.substr(start, end_pos - start);
 		items.push_back(item);
 		start = end_pos + delimiter.length();
-	}
+
+	} while (end_pos != std::string_view::npos);
+	return items;
 }
 
 std::vector<std::string_view> split_on_any(std::string_view s, std::string_view delimiters, int nsplits) {
 	std::vector<std::string_view> items;
 	size_t start = 0;
-	for (;;) {
-		size_t end_pos = s.find_first_of(delimiters, start);
-		if (end_pos == std::string_view::npos || (int) items.size() == nsplits) {
-			std::string_view item = s.substr(start);
-			items.push_back(item);
-			return items;
+	size_t end_pos;
+	do {
+		end_pos = s.find_first_of(delimiters, start);
+		if ((int) items.size() == nsplits) {
+			end_pos = std::string_view::npos;
 		}
 
 		std::string_view item = s.substr(start, end_pos - start);
 		items.push_back(item);
 		start = end_pos + 1;
-	}
+
+	} while (end_pos != std::string_view::npos);
+	return items;
 }
 
-// todo: allow semicolons or no semicolons
+// todo: https://html.spec.whatwg.org/multipage/named-characters.html
 struct EscapeSequence {
 	std::string_view sequence;
 	std::string_view replacement;
@@ -76,19 +77,16 @@ constexpr std::array ESCAPES = std::to_array<EscapeSequence>({
 std::string escape(std::string_view source) {
 	std::string output;
 	for (size_t i = 0; i < source.size(); i++) {
-		// todo: goto is so hard in C++ :(
-		bool escaped = false;
 		for (auto escape : ESCAPES) {
 			if (source.compare(i, escape.replacement.size(), escape.replacement) == 0) {
 				output.push_back('&');
 				output.append(escape.sequence);
-				escaped = true;
-				break;
+				goto outer_loop_end;
 			}
 		}
-		if (!escaped) {
-			output.push_back(source[i]);
-		}
+		output.push_back(source[i]);
+outer_loop_end:
+		;
 	}
 	return output;
 }
@@ -106,4 +104,16 @@ void unescape_sequence(std::string_view source, size_t &offset, std::string &out
 
 void make_lowercase(std::string& s) {
 	std::transform(s.begin(), s.end(), s.begin(), [](char c) { return std::tolower(c); });
+}
+
+std::optional<std::string> read_entire_file_to_string(std::string const& path) {
+	std::ifstream file(path);
+	if (!file.is_open()) {
+		std::cerr << "Invalid file path: " << path << std::endl;
+		return std::nullopt;
+	}
+
+	std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+	file.close();
+	return content;
 }

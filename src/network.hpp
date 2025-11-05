@@ -14,8 +14,11 @@ struct URL {
 	uint16_t port;
 	std::string path;
 
+	static URL ABOUT_BLANK;
+
 	static std::optional<URL> create(std::string_view string);
 	std::optional<URL> resolve(std::string_view url);
+
 
 // todo: i want these to be module-private
 	bool operator==(const URL& other) const noexcept;
@@ -35,9 +38,7 @@ struct CachedHttpResponse;
 
 // Some URLs don't need a ConnectionManager at all! Should we allow them to get their contents without access to a ConnectionManager?
 class ConnectionManager {
-	// todo: default ctor and dtor? handle this (and the HttpConnections) correctly?
 	std::unordered_map<URL, std::unique_ptr<HttpConnection>> m_active_connections;
-	// todo: retest that this works
 	std::unordered_map<URL, std::unique_ptr<CachedHttpResponse>> m_cached_responses;
 
 public:

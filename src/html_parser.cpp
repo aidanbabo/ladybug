@@ -89,22 +89,15 @@ HTMLParser::HTMLParser(std::string body)
 void HTMLParser::implicit_tags(std::optional<std::string_view> tag_) {
 	std::string_view tag = tag_.value_or("");
 	for (;;) {
-		// todo: no need to collect
-		std::vector<std::string_view> open_tags(m_unfinished.size());
-		// Direct list initialization prevents the std::string from being copied to the output buffer before a conversion to std::string_view.
-		// Not preventing this means std::string_view would be dangling.
-		std::transform(m_unfinished.begin(), m_unfinished.end(), open_tags.begin(), [](std::shared_ptr<Element> t) { return std::string_view{t->tag}; });
-
-		if (open_tags.empty() && tag != "html") {
+		if (m_unfinished.empty() && tag != "html") {
 			add_tag("html");
-		} else if (open_tags.size() == 1 && open_tags[0] == "html" && tag != "head" && tag != "body" && tag != "/html") {
+		} else if (m_unfinished.size() == 1 && m_unfinished[0]->tag == "html" && tag != "head" && tag != "body" && tag != "/html") {
 			if (std::find(HEAD_TAGS.begin(), HEAD_TAGS.end(), tag) != HEAD_TAGS.end()) {
 				add_tag("head");
 			} else {
 				add_tag("body");
 			}
-		// todo: deep vector equals?
-		} else if (open_tags.size() == 2 && open_tags[0] == "html" && open_tags[1] == "head" && tag != "/head" && std::find(HEAD_TAGS.begin(), HEAD_TAGS.end(), tag) == HEAD_TAGS.end()) {
+		} else if (m_unfinished.size() == 2 && m_unfinished[0]->tag == "html" && m_unfinished[1]->tag == "head" && tag != "/head" && std::find(HEAD_TAGS.begin(), HEAD_TAGS.end(), tag) == HEAD_TAGS.end()) {
 			add_tag("/head");
 		} else {
 			break;
@@ -181,10 +174,12 @@ std::optional<std::shared_ptr<Element>> HTMLParser::add_tag(std::string tag_) {
 		if (m_unfinished.size() == 1) {
 			return std::nullopt;
 		}
-		// todo: why aren't these one step?
 		std::shared_ptr<Element> node = m_unfinished.back();
 		m_unfinished.pop_back();
-		// todo: check it's the right tag?
+		if (node->tag != tag.substr(1)) {
+			std::cerr << "closing " << node->tag << " with non-matching closing tag " << tag.substr(1) << std::endl;
+			// close anyways
+		}
 
 		assert(!m_unfinished.empty());
 		std::shared_ptr<Node> parent = m_unfinished.back();
@@ -206,7 +201,10 @@ std::optional<std::shared_ptr<Element>> HTMLParser::add_tag(std::string tag_) {
 			assert(!m_unfinished.empty());
 			std::shared_ptr<Node> parent = m_unfinished.back();
 			parent->children.push_back(node);
-			// todo: return something here? is this valuable?
+			// todo: It remains to bee see if returning something here is valuable.
+			// Currently, the return value is only used to check if we parsed an opening script tag
+			// so that we can shift the parser into a different state, in which case we don't care about closing
+			// <p> or <li> tags.
 		}
 		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
 		std::shared_ptr<Element> node = std::make_shared<Element>(parent, tag, attributes);
@@ -234,18 +232,30 @@ std::shared_ptr<Node> HTMLParser::finish() {
 std::shared_ptr<Node> HTMLParser::parse() {
 	std::string buffer;
 	size_t i = 0;
+
 	bool in_tag = false;
 	bool in_script = false;
+	bool in_comment = false;
 	bool in_quoted_attribute = false;
 	while (i < m_body.length()) {
 		if (in_script) {
 			std::string_view script_end = "</script>";
 			size_t script_end_start = m_body.find(script_end, i);
-			assert(script_end_start != std::string::npos);
 			add_tag(std::string{ "/script" });
+			// Out of bounds is ok.
 			i = script_end_start + script_end.size();
 			in_script = false;
+			continue;
 		}
+		if (in_comment) {
+			std::string_view comment_end = "-->";
+			size_t comment_end_start = m_body.find(comment_end, i);
+			// Out of bounds is ok.
+			i = comment_end_start + comment_end.size();
+			in_comment = false;
+			continue;
+		}
+
 		char c = m_body[i++];
 		if (in_quoted_attribute) {
 			if (c == '"') {
@@ -255,10 +265,8 @@ std::shared_ptr<Node> HTMLParser::parse() {
 		} else if (c == '<') {
 			std::string_view comment_start = "!--";
 			if (m_body.compare(i, comment_start.size(), comment_start.data()) == 0) {
-				std::string_view comment_end = "-->";
-				size_t comment_end_start = m_body.find(comment_end, i + comment_start.size());
-				assert(comment_end_start != std::string::npos);
-				i = comment_end_start + comment_end.size();
+				i += comment_start.size();
+				in_comment = true;
 			} else {
 				in_tag = true;
 				if (!buffer.empty()) {
@@ -285,9 +293,8 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			buffer.push_back(c);
 		}
 	}
-	// todo: handle in_script
 
-	if (!in_tag && !buffer.empty()) {
+	if (!in_script && !in_comment && !in_tag && !buffer.empty()) {
 		add_text(buffer);
 	}
 	return finish();

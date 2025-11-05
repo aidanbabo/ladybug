@@ -43,8 +43,8 @@ struct DrawRect : public DrawCommand {
 	DrawRect(float left, float top, float right, float bottom, SkColor color);
 };
 
+// todo: nest inside of FontCache (std::hash is giving me some trouble)
 struct FontInfo {
-// todo: fields are module-private
 	size_t size;
 	bool bold;
 	bool italic;
@@ -86,6 +86,7 @@ class BlockLayout;
 // todo: no more constructors, only factories that use shared
 class LayoutBase : public std::enable_shared_from_this<LayoutBase> {
 // todo: make protected, why doesn't it work?
+// pass key idiom seems to be the only way? kinda gross!
 public:
 	float m_x = -1;
 	float m_y = -1;
@@ -135,15 +136,10 @@ private:
 	LayoutMode layout_mode() const;
 };
 
-// todo: we need a better way to do this than inheritance
 class DocumentLayout : public LayoutBase {
-	// todo: can we just pass these in as well?
-	FontCache& m_font_cache;
-	int m_screen_width;
-
 public:
-	DocumentLayout(std::shared_ptr<Node> node, FontCache& font_cache, int screen_width);
-	void layout();
+	DocumentLayout(std::shared_ptr<Node> node);
+	void layout(FontCache& font_cache, float screen_width);
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 };
 
