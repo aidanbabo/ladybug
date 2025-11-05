@@ -14,7 +14,7 @@ System dependencies: `zlib`, `libssl`, `libcrypto`.
 ## Running
 - Run `./build/ladybird [url]` to run the browser.
     - The URL must contain the scheme (currently, `http`, `https`, `file` or `data`).
-- Providing no arguments will default it to `test_data/index.html`. (But only on my machine! Watch out!)
+- Providing no arguments will default it to `./test_data/index.html`.
 
 ## Source
 This browsers follows along with the tutorial at [https://browser.engineering](). This resource was recommended by the fine fellows who write the Ladybird browser (hence the name ladybug) to understand how a browser works.
@@ -27,6 +27,7 @@ Some of the exercises have been done, only the ones I find technically interesti
 - Fetch an HTML document over HTTP or HTTPS.
     - Supports gzip and deflate encodings as well as chunked transfer.
     - Has a barebones HTTP cache and keep alive connections.
+- Support for absolute and relative `file:` urls and `data:text/html,` urls.
 - Renders a small (but the essential) subset of HTML content to the screen.
     - Supports basic text styling with `<b>`, `<i>`, `<sup>` and others.
     - Loads CSS from remote sources and implements the cascade.

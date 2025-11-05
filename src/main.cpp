@@ -93,14 +93,12 @@ public:
 		sk_sp<SkSurface> root_surface;
 		initialize_texture(renderer, INITIAL_WIDTH, INITIAL_HEIGHT, texture, root_surface, info);
 
-		// this doesn't ever want to seem to work so full paths it is
-		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("/home/ababo/dev/browser/fonts");
+		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("./fonts");
 		assert(font_mgr);
-		// todo: make from stream and use relative paths
-		sk_sp<SkTypeface> normal      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman.ttf");
-		sk_sp<SkTypeface> bold        = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Bold.ttf");
-		sk_sp<SkTypeface> italic      = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Italic.ttf");
-		sk_sp<SkTypeface> bold_italic = font_mgr->makeFromFile("/home/ababo/dev/browser/fonts/Times New Roman Bold Italic.ttf");
+		sk_sp<SkTypeface> normal      = font_mgr->makeFromFile("./fonts/Times New Roman.ttf");
+		sk_sp<SkTypeface> bold        = font_mgr->makeFromFile("./fonts/Times New Roman Bold.ttf");
+		sk_sp<SkTypeface> italic      = font_mgr->makeFromFile("./fonts/Times New Roman Italic.ttf");
+		sk_sp<SkTypeface> bold_italic = font_mgr->makeFromFile("./fonts/Times New Roman Bold Italic.ttf");
 		assert(normal);
 		assert(bold);
 		assert(italic);
@@ -312,7 +310,7 @@ int main(int argc, char** argv) {
 	auto connection_manager = ConnectionManager();
 	URL url = [&] {
 		if (argc == 1) {
-			return URL::create("file:///home/ababo/dev/browser/test_data/index.html").value_or(URL::ABOUT_BLANK);
+			return URL::create("file:./test_data/index.html").value_or(URL::ABOUT_BLANK);
 		} else if (argc == 2) {
 			return URL::create(argv[1]).value_or(URL::ABOUT_BLANK);
 		} else {

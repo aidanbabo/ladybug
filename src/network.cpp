@@ -28,80 +28,55 @@ void network_init() {
 	OpenSSL_add_all_algorithms();
 }
 
-std::optional<URL> URL::create(std::string_view string) {
-	auto n = string.find(":");
+static std::optional<URL> parse_data_url(bool view_source, std::string scheme, std::string_view string) {
+	size_t n = string.find(",");
 	if (n == std::string::npos) {
-		std::cerr << "Expected scheme in URL" << std::endl;
+		std::cerr << "Expected ',' in data url" << std::endl;
 		return std::nullopt;
 	}
-	std::string scheme(string.substr(0, n));
-
-	bool view_source = false;
-	if (scheme == "view-source") {
-		view_source = true;
-		string = string.substr(n + 1);
-
-		n = string.find(":");
-		if (n == std::string::npos) {
-			std::cerr << "Expected scheme after view-source in URL" << std::endl;
-			return std::nullopt;
-		}
-		scheme = string.substr(0, n);
-	}
-
-	constexpr std::array supported_protocols{"http", "https", "file", "data", "about"};
-	bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), scheme) != supported_protocols.end();
-	if (!supported) {
-		std::cerr << "Unsupported protocol " << scheme << " in URL" << std::endl;
+	if (string.substr(0, n) != "text/html") {
+		std::cerr << "Unsupported MIME type " << string.substr(0, n) << " in URL" << std::endl;
 		return std::nullopt;
 	}
+	// todo: make URL an enum (Rust style) or abstract class (OO style)
+	// this isn't really what path is for...
+	std::string path(string.substr(n + 1));
+	return URL {
+		.view_source = view_source,
+		.scheme = scheme,
+		.host = "",
+		.port = 0,
+		.path = path,
+	};
+}
 
-	if (scheme == "data" || scheme == "about") {
-		string = string.substr(n + 1);
-	} else {
-		if (string.substr(n + 1, 2) != "//") {
-			std::cerr << "Expected '//' after scheme: in URL" << std::endl;
-			return std::nullopt;
-		}
-		string = string.substr(n + 3);
+static std::optional<URL> parse_about_url(bool view_source, std::string scheme, std::string_view string) {
+	if (string != "blank") {
+		std::cerr << "Unsupported about page " << string << " in URL" << std::endl;
+		return std::nullopt;
 	}
+	return URL {
+		.view_source = view_source,
+		.scheme = scheme,
+		.host = "blank",
+		.port = 0,
+		.path = "",
+	};
+}
 
-	if (scheme == "data") {
-		n = string.find(",");
-		if (n == std::string::npos) {
-			std::cerr << "Expected ',' in data url" << std::endl;
-			return std::nullopt;
-		}
-		if (string.substr(0, n) != "text/html") {
-			std::cerr << "Unsupported MIME type " << string.substr(0, n) << " in URL" << std::endl;
-			return std::nullopt;
-		}
-		// todo: make URL an enum (Rust style) or abstract class (OO style)
-		// this isn't really what path is for...
-		std::string path(string.substr(n + 1));
-		return URL {
-			.view_source = view_source,
-			.scheme = scheme,
-			.host = "",
-			.port = 0,
-			.path = path,
-		};
-	} else if (scheme == "about") {
-		if (string != "blank") {
-			std::cerr << "Unsupported about page " << string << " in URL" << std::endl;
-			return std::nullopt;
-		}
-		return URL {
-			.view_source = view_source,
-			.scheme = scheme,
-			.host = "blank",
-			.port = 0,
-			.path = "",
-		};
-	}
+static std::optional<URL> parse_relative_file_url(bool view_source, std::string scheme, std::string_view string) {
+	return URL {
+		.view_source = view_source,
+		.scheme = scheme,
+		.host = "blank",
+		.port = 0,
+		.path = std::string(string),
+	};
+}
 
+static std::optional<URL> parse_standard_url(bool view_source, std::string scheme, std::string_view string) {
 	std::string host, path;
-	n = string.find("/");
+	size_t n = string.find("/");
 	if (n == std::string::npos) {
 		host = string;
 		path = "/";
@@ -138,6 +113,58 @@ std::optional<URL> URL::create(std::string_view string) {
 		.path = path,
 	};
 }
+
+std::optional<URL> URL::create(std::string_view string) {
+	auto n = string.find(":");
+	if (n == std::string::npos) {
+		std::cerr << "Expected scheme in URL" << std::endl;
+		return std::nullopt;
+	}
+	std::string scheme(string.substr(0, n));
+
+	bool view_source = false;
+	if (scheme == "view-source") {
+		view_source = true;
+		string = string.substr(n + 1);
+
+		n = string.find(":");
+		if (n == std::string::npos) {
+			std::cerr << "Expected scheme after view-source in URL" << std::endl;
+			return std::nullopt;
+		}
+		scheme = string.substr(0, n);
+	}
+	string = string.substr(n + 1);
+
+	constexpr std::array supported_protocols{"http", "https", "file", "data", "about"};
+	bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), scheme) != supported_protocols.end();
+	if (!supported) {
+		std::cerr << "Unsupported protocol " << scheme << " in URL" << std::endl;
+		return std::nullopt;
+	}
+
+	if (scheme == "data") {
+		return parse_data_url(view_source, std::move(scheme), string);
+	} else if (scheme == "about") {
+		return parse_about_url(view_source, std::move(scheme), string);
+	} else if (scheme == "file") {
+		if (string.starts_with("//")) {
+			return parse_standard_url(view_source, std::move(scheme), string.substr(2));
+		} else {
+			return parse_relative_file_url(view_source, std::move(scheme), string);
+		}
+	} else if (scheme == "http" || scheme == "https") {
+		if (!string.starts_with("//")) {
+			std::cerr << "Expected '//' after scheme: in " << scheme << " URL" << std::endl;
+			return std::nullopt;
+		}
+		string = string.substr(2);
+		return parse_standard_url(view_source, std::move(scheme), string);
+	} else {
+		assert(false && "unreachable");
+	}
+}
+
 URL URL::ABOUT_BLANK = *URL::create("about:blank");
 
 std::optional<URL> URL::resolve(std::string_view url_) {
