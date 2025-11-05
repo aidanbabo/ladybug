@@ -45,6 +45,8 @@ struct DrawRect : public DrawCommand {
 
 // todo: nest inside of FontCache (std::hash is giving me some trouble)
 struct FontInfo {
+	// todo: find a way to remove this super bloat!
+	std::string name;
 	size_t size;
 	bool bold;
 	bool italic;
@@ -67,12 +69,13 @@ struct FontType {
 
 class FontCache {
 	std::unordered_map<FontInfo, SkFont> m_fonts;
-	FontType m_font_type;
+	std::unordered_map<std::string, FontType> m_font_types;
 
 public:
-	FontCache(FontType ty);
+	FontCache();
+	void add_type(std::string name, FontType type);
 
-	SkFont& get_font(size_t size, bool bold, bool italic);
+	SkFont& get_font(std::string const& name, size_t size, bool bold, bool italic);
 };
 
 enum class LayoutMode {

@@ -59,6 +59,31 @@ void tree_to_list(std::shared_ptr<Node> node, std::vector<std::shared_ptr<Node>>
 	}
 }
 
+static FontType load_fonts(
+	sk_sp<SkFontMgr> font_mgr,
+	char const* normal_path,
+	char const* bold_path,
+	char const* italic_path,
+	char const* bold_italic_path
+) {
+	sk_sp<SkTypeface> normal      = font_mgr->makeFromFile(normal_path);
+	sk_sp<SkTypeface> bold        = font_mgr->makeFromFile(bold_path);
+	sk_sp<SkTypeface> italic      = font_mgr->makeFromFile(italic_path);
+	sk_sp<SkTypeface> bold_italic = font_mgr->makeFromFile(bold_italic_path);
+	assert(normal);
+	assert(bold);
+	assert(italic);
+	assert(bold_italic);
+
+	FontType font = FontType {
+		.normal = normal,
+		.bold = bold,
+		.italic = italic,
+		.bold_italic = bold_italic,
+	};
+	return font;
+}
+
 class Browser {
 	SDL_Window *m_window;
 	SDL_Renderer *m_renderer;
@@ -95,23 +120,26 @@ public:
 
 		sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("./fonts");
 		assert(font_mgr);
-		sk_sp<SkTypeface> normal      = font_mgr->makeFromFile("./fonts/Times New Roman.ttf");
-		sk_sp<SkTypeface> bold        = font_mgr->makeFromFile("./fonts/Times New Roman Bold.ttf");
-		sk_sp<SkTypeface> italic      = font_mgr->makeFromFile("./fonts/Times New Roman Italic.ttf");
-		sk_sp<SkTypeface> bold_italic = font_mgr->makeFromFile("./fonts/Times New Roman Bold Italic.ttf");
-		assert(normal);
-		assert(bold);
-		assert(italic);
-		assert(bold_italic);
 
-		FontType times_new_roman = FontType {
-			.normal = normal,
-			.bold = bold,
-			.italic = italic,
-			.bold_italic = bold_italic,
-		};
+		FontType times_new_roman = load_fonts(
+			font_mgr,
+			"./fonts/Times New Roman.ttf",
+			"./fonts/Times New Roman Bold.ttf",
+			"./fonts/Times New Roman Italic.ttf",
+			"./fonts/Times New Roman Bold Italic.ttf"
+		);
 
-		FontCache font_cache = FontCache(times_new_roman);
+		FontType courier_new = load_fonts(
+			font_mgr,
+			"./fonts/cour.ttf",
+			"./fonts/courbd.ttf",
+			"./fonts/couri.ttf",
+			"./fonts/courbi.ttf"
+		);
+
+		FontCache font_cache;
+		font_cache.add_type("times", times_new_roman);
+		font_cache.add_type("courier", courier_new);
 
 		StyleSheet default_style_sheet{};
 		if (auto css_string = read_entire_file_to_string("styles/browser.css")) {

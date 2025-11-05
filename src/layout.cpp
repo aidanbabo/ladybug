@@ -116,21 +116,27 @@ void DrawRect::execute(float scroll, SkCanvas& canvas) {
 }
 
 bool FontInfo::operator==(const FontInfo& other) const noexcept {
-	return size == other.size && bold == other.bold && italic == other.italic;
+	return size == other.size && bold == other.bold && italic == other.italic && name == other.name;
 }
 
 size_t std::hash<FontInfo>::operator()(const FontInfo& f) const noexcept {
 	size_t seed = 0;
+	combine_hash(seed, std::hash<std::string>{}(f.name));
 	combine_hash(seed, std::hash<size_t>{}(f.size));
 	combine_hash(seed, std::hash<bool>{}(f.bold));
 	combine_hash(seed, std::hash<bool>{}(f.italic));
 	return seed;
 }
 
-FontCache::FontCache(FontType ty) : m_font_type(ty) {}
+FontCache::FontCache() : m_fonts() {}
 
-SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
+void FontCache::add_type(std::string name, FontType type) {
+	m_font_types.insert({name, type});
+}
+
+SkFont& FontCache::get_font(std::string const& name, size_t size, bool bold, bool italic) {
 	auto info = FontInfo {
+		.name = name,
 		.size = size,
 		.bold = bold,
 		.italic = italic,
@@ -139,15 +145,21 @@ SkFont& FontCache::get_font(size_t size, bool bold, bool italic) {
 		return f->second;
 	}
 
+	auto font_type = m_font_types.find(name);
+	if (font_type == m_font_types.end()) {
+		std::cerr << "Unsupported font " << name << std::endl;
+		font_type = m_font_types.find("times");
+		assert(font_type != m_font_types.end());
+	}
 	sk_sp<SkTypeface> typeface = [&] {
 		if (!bold && !italic) {
-			return m_font_type.normal;
+			return font_type->second.normal;
 		} else if (bold && !italic) {
-			return m_font_type.bold;
+			return font_type->second.bold;
 		} else if (!bold && italic) {
-			return m_font_type.italic;
+			return font_type->second.italic;
 		} else if (bold && italic) {
-			return m_font_type.bold_italic;
+			return font_type->second.bold_italic;
 		} else {
 			assert(false && "unreachable");
 		}
@@ -372,10 +384,11 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache) {
 			is_italic = true;
 		}
 
+		std::string font_family = node.styles.find("font-family")->second;
 		std::string_view size_str { node.styles.find("font-size")->second };
 		size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
 
-		SkFont &font = font_cache.get_font(size, is_bold, is_italic);
+		SkFont &font = font_cache.get_font(font_family, size, is_bold, is_italic);
 		std::vector<std::string_view> words = split_on_any(text.text);
 		for (auto w : words) {
 			w = trim_whitespace(w);

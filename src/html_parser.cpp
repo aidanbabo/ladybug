@@ -32,6 +32,7 @@ static const std::unordered_map<std::string_view, std::string_view> INHERITIED_P
 	{ "font-style", "normal" },
 	{ "font-weight", "normal" },
 	{ "color", "black" },
+	{ "font-family", "times" },
 };
 
 void Node::style(StyleSheet const& sheet) {
