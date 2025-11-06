@@ -200,7 +200,7 @@ public:
 			return p.first->priority;
 		});
 		m_nodes->style(rules);
-		//print_node(*m_nodes);
+		print_node(*m_nodes);
 		m_layout = std::make_shared<DocumentLayout>(m_nodes);
 		m_layout->layout(m_font_cache, m_width);
 		//m_layout->print_layout();

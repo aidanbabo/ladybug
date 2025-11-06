@@ -185,8 +185,8 @@ void LayoutBase::print_layout(int indent) {
 			auto text = static_cast<Text const&>(*node);
 			std::cout << text.text << std::endl;;
 		} else if (node->type == NodeType::Element) {
-			auto tag = static_cast<Element const&>(*node);
-			std::cout << "<" << tag.tag << ">" << std::endl;;
+			auto element = static_cast<Element const&>(*node);
+			std::cout << "<" << element.tag << ">" << std::endl;;
 		}
 	}
 
@@ -244,9 +244,30 @@ LayoutMode BlockLayout::layout_mode() const {
 
 constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 
+static std::optional<float> parse_pixels(std::string_view s) {
+	if (!s.ends_with("px")) {
+		return std::nullopt;
+	}
+	float pixels;
+	if (std::from_chars(s.data(), s.data() + s.size() - 2, pixels).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	return pixels;
+}
+
 void BlockLayout::layout(FontCache& font_cache) {
 	m_x = m_parent.lock()->m_x;
-	m_width = m_parent.lock()->m_width;
+	{
+		std::optional<float> width_opt = std::nullopt;
+		if (auto width = m_nodes[0]->styles.find("width"); width != m_nodes[0]->styles.end() && width->second != "auto") {
+			width_opt = parse_pixels(width->second);
+		}
+		if (width_opt) {
+			m_width = *width_opt;
+		} else {
+			m_width = m_parent.lock()->m_width;
+		}
+	}
 	if (m_nodes[0]->type == NodeType::Element) {
 		if (auto element = static_cast<Element const&>(*m_nodes[0]); element.tag == "li") {
 			assert(m_nodes.size() == 1 && "layout isn't shared between li");
@@ -317,7 +338,15 @@ void BlockLayout::layout(FontCache& font_cache) {
 	}
 
 	if (mode == LayoutMode::Block) {
-		m_height = std::transform_reduce(m_children.begin(), m_children.end(), 0.0, std::plus<>{}, [](auto const& c) { return c->m_height; });
+		std::optional<float> height_opt = std::nullopt;
+		if (auto height = m_nodes[0]->styles.find("height"); height != m_nodes[0]->styles.end() && height->second != "auto") {
+			height_opt = parse_pixels(height->second);
+		}
+		if (height_opt) {
+			m_height = *height_opt;
+		} else {
+			m_height = std::transform_reduce(m_children.begin(), m_children.end(), 0.0, std::plus<>{}, [](auto const& c) { return c->m_height; });
+		}
 	} else if (mode == LayoutMode::Inline) {
 		m_height = m_cursor_y;
 	} else {
