@@ -214,15 +214,6 @@ BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_p
 	}
 }
 
-constexpr std::array BLOCK_ELEMENTS = {
-	"html", "body", "article", "section", "nav", "aside",
-	"h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
-	"footer", "address", "p", "hr", "pre", "blockquote",
-	"ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
-	"figcaption", "main", "div", "table", "form", "fieldset",
-	"legend", "details", "summary"
-};
-
 LayoutMode BlockLayout::layout_mode() const {
 	if (std::ranges::all_of(m_nodes, [](std::shared_ptr<Node> n) { return n->type == NodeType::Text; })) {
 		return LayoutMode::Inline;
@@ -231,7 +222,7 @@ LayoutMode BlockLayout::layout_mode() const {
 		for (auto const& child : node->children) {
 			if (child->type == NodeType::Element) {
 				auto element = static_cast<Element const&>(*child);
-				if (std::find(BLOCK_ELEMENTS.begin(), BLOCK_ELEMENTS.end(), element.tag) != BLOCK_ELEMENTS.end()) {
+				if (auto display = element.styles.find("display"); display != element.attributes.end() && display->second == "block") {
 					return LayoutMode::Block;
 				}
 			}
