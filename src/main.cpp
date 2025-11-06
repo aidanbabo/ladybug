@@ -139,7 +139,7 @@ public:
 
 		FontCache font_cache;
 		font_cache.add_type("times", times_new_roman);
-		font_cache.add_type("courier", courier_new);
+		font_cache.add_type("courier new", courier_new);
 
 		StyleSheet default_style_sheet{};
 		if (auto css_string = read_entire_file_to_string("styles/browser.css")) {

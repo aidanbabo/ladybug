@@ -71,18 +71,25 @@ void CSSParser::whitespace() {
 
 std::optional<std::string> CSSParser::word() {
 	constexpr std::string_view puncs = "#-.%";
+	bool in_quotes = false;
 	auto start = m_i;
+	std::string buf;
 	while (m_i < m_s.size()) {
-		if (std::isalnum(m_s[m_i]) || puncs.find(m_s[m_i]) != std::string::npos) {
-			m_i++;
+		if (m_s[m_i] == '\'') {
+			in_quotes = !in_quotes;
+		} else if (in_quotes) {
+			buf.push_back(m_s[m_i]);
+		} else if (std::isalnum(m_s[m_i]) || puncs.find(m_s[m_i]) != std::string::npos) {
+			buf.push_back(m_s[m_i]);
 		} else {
 			break;
 		}
+		m_i++;
 	}
 	if (!(m_i > start)) {
 		return std::nullopt;
 	}
-	return m_s.substr(start, m_i - start);
+	return buf;
 }
 
 bool CSSParser::literal(char literal) {
