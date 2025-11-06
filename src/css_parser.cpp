@@ -3,6 +3,9 @@
 #include "parsers.hpp"
 #include "utils.hpp"
 
+#include <array>
+#include <algorithm>
+
 Selector::Selector(size_t priority)
 	: priority(priority)
 {}
@@ -93,7 +96,7 @@ std::optional<std::string> CSSParser::word() {
 }
 
 bool CSSParser::literal(char literal) {
-	if (!(m_i < m_s.size()) && m_s[m_i] == literal) {
+	if (!(m_i < m_s.size() && m_s[m_i] == literal)) {
 		return false;
 	}
 	m_i++;
@@ -123,14 +126,51 @@ std::optional<char> CSSParser::ignore_until_any(std::string_view chars) {
 	return std::nullopt;
 }
 
+bool CSSParser::shorthand_property_extras(std::unordered_map<std::string, std::string>& pairs, std::string prop, std::string first) {
+	assert(prop == "font");
+	auto style { first };
+
+	auto weight { word() };
+	if (!weight) return false;
+	whitespace();
+
+	auto size { word() };
+	if (!size) return false;
+	whitespace();
+
+	auto family { word() };
+	if (!family) return false;
+	whitespace();
+
+	if (!literal(';')) return false;
+
+	pairs["font-style"] = style;
+	pairs["font-weight"] = *weight;
+	pairs["font-size"] = *size;
+	pairs["font-family"] = *family;
+
+	return true;
+}
+
+constexpr std::array<std::string_view, 1> SHORTHAND_PROPERTIES = { "font" };
+
 std::optional<std::unordered_map<std::string, std::string>> CSSParser::body() {
 	std::unordered_map<std::string, std::string> pairs;
 	while (m_i < m_s.size()) {
 		auto p = pair();
 		if (!p) goto failed_parse;
-		pairs[std::move(p->first)] = std::move(p->second);
 		whitespace();
-		if (!literal(';')) goto failed_parse;
+		if (!literal(';')) {
+			if (std::find(SHORTHAND_PROPERTIES.begin(), SHORTHAND_PROPERTIES.end(), p->first) != SHORTHAND_PROPERTIES.end()) {
+				if (!shorthand_property_extras(pairs, std::move(p->first), std::move(p->second))) {
+					goto failed_parse;
+				}
+			} else {
+				goto failed_parse;
+			}
+		} else {
+			pairs[std::move(p->first)] = std::move(p->second);
+		}
 		whitespace();
 		continue;
 failed_parse:

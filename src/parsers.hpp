@@ -108,4 +108,5 @@ private:
 	std::optional<std::pair<std::string, std::string>> pair();
 	std::optional<char> ignore_until_any(std::string_view chars);
 	std::optional<std::shared_ptr<Selector>> selector();
+	bool shorthand_property_extras(std::unordered_map<std::string, std::string>& pairs, std::string prop, std::string first);
 };
