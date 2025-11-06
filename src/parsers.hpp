@@ -86,6 +86,13 @@ struct DescendantSelector : public Selector {
 	bool matches(Node const& node) override;
 };
 
+struct ClassSelector : public Selector {
+	std::string class_;
+
+	ClassSelector(std::string class_);
+	bool matches(Node const& node) override;
+};
+
 class CSSParser {
 	std::string m_s;
 	size_t m_i;

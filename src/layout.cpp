@@ -55,6 +55,7 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 		{ "lightgray", SK_ColorLTGRAY },
 		{ "lightgrey", SK_ColorLTGRAY },
 		{ "lightblue", SkColorSetRGB(0xad, 0xd8, 0xe6) },
+		{ "yellow", SK_ColorYELLOW },
 	};
 
 	if (auto c = COLOR_NAMES.find(color); c != COLOR_NAMES.end()) {

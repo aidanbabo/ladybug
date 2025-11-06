@@ -36,6 +36,28 @@ bool DescendantSelector::matches(Node const& node) {
 	return false;
 }
 
+ClassSelector::ClassSelector(std::string class_)
+	: Selector(1)
+	, class_(class_)
+{}
+
+bool ClassSelector::matches(Node const& node) {
+	if (node.type != NodeType::Element) {
+		return false;
+	}
+	auto element = static_cast<Element const&>(node);
+	if (auto class_attr = element.attributes.find("class"); class_attr != element.attributes.end()) {
+		// todo: no need to alloc
+		auto classes = split_on_any(class_attr->second);
+		for (auto const& c : classes) {
+			if (c == class_) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 CSSParser::CSSParser(std::string s)
 	: m_s(std::move(s))
 	, m_i(0)
@@ -116,17 +138,26 @@ failed_parse:
 	return pairs;
 }
 
+// todo: element+class selector (e.g. p.large)
 std::optional<std::shared_ptr<Selector>> CSSParser::selector() {
+	auto class_or_tag_selector = [](std::string w) -> std::shared_ptr<Selector> {
+		if (w.starts_with('.')) {
+			return std::make_shared<ClassSelector>(w.substr(1));
+		} else {
+			return std::make_shared<TagSelector>(w);
+		}
+	};
+
 	auto w = word();
 	if (!w) return std::nullopt;
 	make_lowercase(*w);
-	std::shared_ptr<Selector> out = std::make_shared<TagSelector>(*w);
+	auto out = class_or_tag_selector(*w);
 	whitespace();
 	while (m_i < m_s.size() && m_s[m_i] != '{') {
 		auto tag = word();
 		if (!tag) return std::nullopt;
 		make_lowercase(*tag);
-		auto descendant = std::make_shared<TagSelector>(*tag);
+		auto descendant = class_or_tag_selector(*tag);
 		out = std::make_shared<DescendantSelector>(out, descendant);
 		whitespace();
 	}
