@@ -427,6 +427,9 @@ void BlockLayout::recurse(Node const& node, FontCache& font_cache) {
 		}
 		if (element.tag == "p") {
 			// todo: move to css?
+			flush();
+			// todo: i don't know if this is in the book at this point
+			// why do we still need it?
 			m_cursor_y += VSTEP;
 		}
 	} else {
