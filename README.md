@@ -28,8 +28,10 @@ Some of the exercises have been done, only the ones I find technically interesti
     - Supports gzip and deflate encodings as well as chunked transfer.
     - Has a barebones HTTP cache and keep alive connections.
 - Support for absolute and relative `file:` urls and `data:text/html,` urls.
-- Renders a small (but the essential) subset of HTML content to the screen.
-    - Supports basic text styling with `<b>`, `<i>`, `<sup>` and others.
+- Renders HTML content to the screen and styles it with CSS.
     - Loads CSS from remote sources and implements the cascade.
+    - Support for most font properties and some layout properties.
+    - Supports tag, class and descendant selectors as well as selector sequences (i.e. `tag.class`).
+    - Supports basic text styling with `<b>`, `<i>`, `<sup>` and others via the user agent style sheet.
 - Scrolling and resizing the window
     - Scrolling via the mousewheel is a little chunky. My mouse wheel doesn't work so testing is difficult. Use the arrow keys.

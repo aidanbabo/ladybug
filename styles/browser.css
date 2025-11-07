@@ -5,7 +5,6 @@ small { font-size: 90%; }
 big { font-size: 110%; }
 pre { background-color: gray; }
 code { font-family: 'courier new'; }
-.yellow { color: yellow; }
 h1.title { text-align: center; }
 
 html { display: block; }

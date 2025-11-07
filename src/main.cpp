@@ -5,6 +5,8 @@
 // todo: Exercise 4-6: Mis-nested formatting tags -> assuming we get to it a little better later
 // todo: Exercise 5-4: Table of contents -> seems like not a real thing? maybe a real use case will appear later on?
 // todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
+// todo: Exercise 6-9: !important -> Not interested
+// todo: Exercise 6-10: :has selectors -> Also not interested AND it would be slow AND maybe I could find a fast impl but i'm NOT interested
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 
