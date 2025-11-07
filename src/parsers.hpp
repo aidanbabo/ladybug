@@ -93,11 +93,11 @@ struct ClassSelector : public Selector {
 	bool matches(Node const& node) override;
 };
 
-struct TagClassSelector : public Selector {
+struct SequenceSelector : public Selector {
 	TagSelector tag;
-	ClassSelector class_;
+	std::vector<ClassSelector> classes;
 
-	TagClassSelector(TagSelector tag, ClassSelector class_);
+	SequenceSelector(TagSelector tag, std::vector<ClassSelector> classes);
 	bool matches(Node const& node) override;
 };
 

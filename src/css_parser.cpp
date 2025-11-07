@@ -5,6 +5,8 @@
 
 #include <array>
 #include <algorithm>
+#include <numeric>
+#include <vector>
 
 Selector::Selector(size_t priority)
 	: priority(priority)
@@ -61,15 +63,15 @@ bool ClassSelector::matches(Node const& node) {
 	return false;
 }
 
-TagClassSelector::TagClassSelector(TagSelector tag, ClassSelector class_)
+SequenceSelector::SequenceSelector(TagSelector tag, std::vector<ClassSelector> classes)
 	// todo: fix this, what is priority?
-	: Selector(tag.priority + class_.priority)
+	: Selector(std::accumulate(classes.begin(), classes.end(), tag.priority, [](auto a, auto c) { return a + c.priority; }))
 	, tag(tag)
-	, class_(class_)
+	, classes(classes)
 {}
 
-bool TagClassSelector::matches(Node const& node) {
-	return tag.matches(node) && class_.matches(node);
+bool SequenceSelector::matches(Node const& node) {
+	return tag.matches(node) && std::all_of(classes.begin(), classes.end(), [&](auto c) { return c.matches(node); });
 }
 
 CSSParser::CSSParser(std::string s)
@@ -197,15 +199,17 @@ failed_parse:
 	return pairs;
 }
 
-// todo: element+class selector (e.g. p.large)
 std::optional<std::shared_ptr<Selector>> CSSParser::selector() {
 	auto class_or_tag_selector = [](std::string w) -> std::shared_ptr<Selector> {
 		if (w.starts_with('.')) {
 			return std::make_shared<ClassSelector>(w.substr(1));
-		} else if (auto period = w.find('.'); period != std::string::npos) {
-			auto tag = TagSelector(w.substr(0, period));
-			auto class_ = ClassSelector(w.substr(period + 1));
-			return std::make_shared<TagClassSelector>(tag, class_);
+		} else if (w.find('.') != std::string::npos) {
+			auto s = split(w, ".");
+			auto tag = TagSelector(std::string{s[0]});
+
+			std::vector<ClassSelector> classes;
+			std::transform(s.begin() + 1, s.end(), std::back_inserter(classes), [](auto str) { return ClassSelector(std::string{str}); });
+			return std::make_shared<SequenceSelector>(tag, classes);
 		} else {
 			return std::make_shared<TagSelector>(w);
 		}
