@@ -536,13 +536,22 @@ void BlockLayout::flush() {
 		}
 	}
 
-	// todo: reintroduce support for centering and right aligning text
+	// todo: reintroduce support for centering and right aligning text.
+	// The problem is sometimes we call flush not inside `word` and so we don't have an obvious `Node` instance to read of styles from.
 	/*
-	if (m_in_title || right_align) {
+	bool right_align = false;
+	if (auto ta = containing_parent.styles.find("text-align"); ta != containing_parent.styles.end() && (ta->second == "right" || ta->second == "end")) {
+		right_align = true;
+	}
+	bool center_align = false;
+	if (auto ta = containing_parent.styles.find("text-align"); ta != containing_parent.styles.end() && ta->second == "center") {
+		center_align = true;
+	}
+	if (center_align || right_align) {
 		auto const& w = m_line.back();
 		float right_side_gap = (float) m_width - w.left - w.width - (float) HSTEP;
 
-		float change = (m_in_title) ? right_side_gap / 2 : right_side_gap;
+		float change = (center_align) ? right_side_gap / 2 : right_side_gap;
 		for (auto &pos : m_line) {
 			pos.left += change;
 		}

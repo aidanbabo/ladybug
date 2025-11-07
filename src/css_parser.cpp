@@ -61,6 +61,17 @@ bool ClassSelector::matches(Node const& node) {
 	return false;
 }
 
+TagClassSelector::TagClassSelector(TagSelector tag, ClassSelector class_)
+	// todo: fix this, what is priority?
+	: Selector(tag.priority + class_.priority)
+	, tag(tag)
+	, class_(class_)
+{}
+
+bool TagClassSelector::matches(Node const& node) {
+	return tag.matches(node) && class_.matches(node);
+}
+
 CSSParser::CSSParser(std::string s)
 	: m_s(std::move(s))
 	, m_i(0)
@@ -191,6 +202,10 @@ std::optional<std::shared_ptr<Selector>> CSSParser::selector() {
 	auto class_or_tag_selector = [](std::string w) -> std::shared_ptr<Selector> {
 		if (w.starts_with('.')) {
 			return std::make_shared<ClassSelector>(w.substr(1));
+		} else if (auto period = w.find('.'); period != std::string::npos) {
+			auto tag = TagSelector(w.substr(0, period));
+			auto class_ = ClassSelector(w.substr(period + 1));
+			return std::make_shared<TagClassSelector>(tag, class_);
 		} else {
 			return std::make_shared<TagSelector>(w);
 		}

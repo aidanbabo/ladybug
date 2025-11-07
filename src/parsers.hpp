@@ -93,6 +93,14 @@ struct ClassSelector : public Selector {
 	bool matches(Node const& node) override;
 };
 
+struct TagClassSelector : public Selector {
+	TagSelector tag;
+	ClassSelector class_;
+
+	TagClassSelector(TagSelector tag, ClassSelector class_);
+	bool matches(Node const& node) override;
+};
+
 class CSSParser {
 	std::string m_s;
 	size_t m_i;

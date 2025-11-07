@@ -121,7 +121,6 @@ class BlockLayout : public LayoutBase {
 	std::vector<StringPosition> m_display_list;
 	float m_cursor_x = 0;
 	float m_cursor_y = 0;
-	bool m_in_title = false;
 	bool m_in_sup = false;
 	std::vector<StringPosition> m_line;
 
