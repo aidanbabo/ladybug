@@ -159,37 +159,60 @@ public:
 		StyleSheet rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;
 		tree_to_list(m_nodes, nodes);
-		std::vector<std::string> links;
+		// true means we must fetch, false means inline
+		std::vector<std::pair<std::string, bool>> styles;
 		for (auto const& node : nodes) {
 			if (node->type != NodeType::Element) {
 				continue;
 			}
 			auto element = static_cast<Element const&>(*node);
-			if (element.tag != "link") {
-				continue;
+			if (element.tag == "style") {
+				Node const& child = *element.children[0];
+				if (child.type == NodeType::Text) {
+					auto text = static_cast<Text const&>(child);
+					styles.push_back(std::make_pair(text.text, false));
+				}
+			} else {
+				if (element.tag != "link") {
+					continue;
+				}
+				auto rel = element.attributes.find("rel");
+				if (rel == element.attributes.end() || rel->second != "stylesheet") {
+					continue;
+				}
+				if (!element.attributes.contains("href")) {
+					continue;
+				}
+				styles.push_back(std::make_pair(element.attributes["href"], true));
 			}
-			auto rel = element.attributes.find("rel");
-			if (rel == element.attributes.end() || rel->second != "stylesheet") {
-				continue;
-			}
-			if (!element.attributes.contains("href")) {
-				continue;
-			}
-			links.push_back(element.attributes["href"]);
 		}
 
-		for (auto const& link : links) {
-			auto style_url = url.resolve(link);
-			if (!style_url) {
-				std::cerr << "Skipping malformed url: '" << link << "'" << std::endl;
+		for (auto const& [access, must_fetch] : styles) {
+			auto body = [&]() -> std::optional<std::string> {
+				if (must_fetch) {
+					auto style_url = url.resolve(access);
+					if (!style_url) {
+						std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
+						return std::nullopt;
+					}
+
+					// todo: handle errors fr
+					auto body = cm.request(*style_url);
+					return body;
+				} else {
+					return access;
+				}
+			}();
+			if (!body) {
 				continue;
 			}
-
-			// todo: handle errors fr
-			auto body = cm.request(*style_url);
-			auto sh = CSSParser(body).parse();
+			auto sh = CSSParser(*body).parse();
 			if (!sh) {
-				std::cerr << "Improper stylesheet at: '" << link << "'" << std::endl;
+				if (must_fetch) {
+					std::cerr << "Improper stylesheet at: '" << access << "'" << std::endl;
+				} else {
+					std::cerr << "Improper inline stylesheet" << std::endl;
+				}
 				continue;
 			}
 			rules.rules.insert(rules.rules.end(), sh->rules.begin(), sh->rules.end());

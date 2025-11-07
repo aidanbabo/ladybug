@@ -13,7 +13,7 @@ enum class NodeType {
 struct StyleSheet;
 
 struct Node {
-	std::vector<std::shared_ptr<Node>> children;
+	std::vector<std::shared_ptr<Node>> children{};
 	std::weak_ptr<Node> parent;
 	NodeType type;
 	std::unordered_map<std::string, std::string> styles{};

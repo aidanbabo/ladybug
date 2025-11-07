@@ -73,7 +73,8 @@ void CSSParser::whitespace() {
 }
 
 std::optional<std::string> CSSParser::word() {
-	constexpr std::string_view puncs = "#-.%";
+	// I added comma here.
+	constexpr std::string_view puncs = "#-.%,";
 	bool in_quotes = false;
 	auto start = m_i;
 	std::string buf;
