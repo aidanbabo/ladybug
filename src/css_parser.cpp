@@ -25,20 +25,26 @@ bool TagSelector::matches(Node const& node) {
 	return false;
 }
 
-DescendantSelector::DescendantSelector(std::shared_ptr<Selector> ancestor, std::shared_ptr<Selector> descendant)
-	: Selector(ancestor->priority + descendant->priority)
-	, ancestor(std::move(ancestor))
-	, descendant(std::move(descendant))
+DescendantSelector::DescendantSelector(std::vector<std::shared_ptr<Selector>> selectors)
+	: Selector(std::accumulate(selectors.begin(), selectors.end(), 0, [](auto a, auto c) { return a + c->priority; }))
+	, selectors(selectors)
 {}
 
 bool DescendantSelector::matches(Node const& node) {
-	if (!descendant->matches(node)) return false;
-	auto parent = node.parent.lock();
-	while (parent) {
-		if (ancestor->matches(*parent)) return true;
-		parent = parent->parent.lock();
+	if (!selectors.back()->matches(node)) {
+		return false;
 	}
-	return false;
+
+	Node const* current = &node;
+	ssize_t i = selectors.size() - 2;
+	while (i >= 0 && current != nullptr) {
+		if (selectors[i]->matches(*current)) {
+			i--;
+		}
+		current = &*current->parent.lock();
+	}
+	// If we make it through all selectors, then they have all matched.
+	return i < 0;
 }
 
 ClassSelector::ClassSelector(std::string class_)
@@ -64,7 +70,6 @@ bool ClassSelector::matches(Node const& node) {
 }
 
 SequenceSelector::SequenceSelector(TagSelector tag, std::vector<ClassSelector> classes)
-	// todo: fix this, what is priority?
 	: Selector(std::accumulate(classes.begin(), classes.end(), tag.priority, [](auto a, auto c) { return a + c.priority; }))
 	, tag(tag)
 	, classes(classes)
@@ -219,14 +224,19 @@ std::optional<std::shared_ptr<Selector>> CSSParser::selector() {
 	if (!w) return std::nullopt;
 	make_lowercase(*w);
 	auto out = class_or_tag_selector(*w);
+	std::vector<std::shared_ptr<Selector>> descendants{};
 	whitespace();
 	while (m_i < m_s.size() && m_s[m_i] != '{') {
+		descendants.push_back(out);
 		auto tag = word();
 		if (!tag) return std::nullopt;
 		make_lowercase(*tag);
-		auto descendant = class_or_tag_selector(*tag);
-		out = std::make_shared<DescendantSelector>(out, descendant);
+		out = class_or_tag_selector(*tag);
 		whitespace();
+	}
+	if (!descendants.empty()) {
+		descendants.push_back(out);
+		return std::make_shared<DescendantSelector>(std::move(descendants));
 	}
 	return out;
 }

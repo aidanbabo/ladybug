@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <ctime>
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -369,7 +370,10 @@ int main(int argc, char** argv) {
 		}
 	}();
 
+	auto begin = std::chrono::steady_clock::now();
 	browser.load(connection_manager, url);
+	auto end = std::chrono::steady_clock::now();
+	std::cout << "Page loaded in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "ms" << std::endl;
 
 	while (!done) {
 		SDL_Event event;

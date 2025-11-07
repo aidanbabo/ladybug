@@ -26,7 +26,7 @@ struct Node {
 struct Selector {
 	size_t priority;
 
-	Selector(size_t priority);
+	explicit Selector(size_t priority);
 	virtual bool matches(Node const& node) = 0;
 	virtual ~Selector() = default;
 };
@@ -70,7 +70,7 @@ void print_node(Node const& node, int indent = 0);
 struct TagSelector : public Selector {
 	std::string tag;
 
-	TagSelector(std::string tag);
+	explicit TagSelector(std::string tag);
 	bool matches(Node const& node) override;
 };
 
@@ -79,17 +79,16 @@ struct DescendantSelector : public Selector {
 	// The problem is that we can't copy this structure (StyleSheet) ever if there are unique_ptrs
 	// which is probably correct, but it is hard to deal with the compiler errors that complain about it
 	// Explicitly deleting constructors and assignment operators helps a little bit but it is a big pain.
-	std::shared_ptr<Selector> ancestor;
-	std::shared_ptr<Selector> descendant;
+	std::vector<std::shared_ptr<Selector>> selectors;
 
-	DescendantSelector(std::shared_ptr<Selector> ancestor, std::shared_ptr<Selector> descendant);
+	explicit DescendantSelector(std::vector<std::shared_ptr<Selector>> selectors);
 	bool matches(Node const& node) override;
 };
 
 struct ClassSelector : public Selector {
 	std::string class_;
 
-	ClassSelector(std::string class_);
+	explicit ClassSelector(std::string class_);
 	bool matches(Node const& node) override;
 };
 
