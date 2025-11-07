@@ -22,15 +22,14 @@ struct DrawCommand {
 struct DrawText : public DrawCommand {
 	// todo: support unicode
 	std::string text;
-	// todo: is copying this around cheap?
-	SkFont font;
+	std::shared_ptr<SkFont> font;
 	SkColor color;
 
-	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, SkFont font, SkColor color);
+	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, std::shared_ptr<SkFont> font, SkColor color);
 
-	void execute(float scroll, SkCanvas& canvas);
+	void execute(float scroll, SkCanvas& canvas) override;
 
-	DrawText(float left, float top, float right, float bottom, std::string text, SkFont font, SkColor color);
+	DrawText(float left, float top, float right, float bottom, std::string text, std::shared_ptr<SkFont> font, SkColor color);
 };
 
 struct DrawRect : public DrawCommand {
@@ -38,9 +37,31 @@ struct DrawRect : public DrawCommand {
 
 	static std::shared_ptr<DrawRect> createLTRB(float left, float top, float right, float bottom, SkColor color);
 
-	void execute(float scroll, SkCanvas& canvas);
+	void execute(float scroll, SkCanvas& canvas) override;
 
 	DrawRect(float left, float top, float right, float bottom, SkColor color);
+};
+
+struct DrawOutline : public DrawCommand {
+	SkColor color;
+	float thickness;
+
+	static std::shared_ptr<DrawOutline> create(SkRect rect, SkColor color, float thickness);
+
+	void execute(float scroll, SkCanvas& canvas) override;
+
+	DrawOutline(SkRect rect, SkColor color, float thickness);
+};
+
+struct DrawLine : public DrawCommand {
+	SkColor color;
+	float thickness;
+
+	static std::shared_ptr<DrawLine> create(float x1, float y1, float x2, float y2, SkColor color, float thickness);
+
+	void execute(float scroll, SkCanvas& canvas) override;
+
+	DrawLine(float x1, float y1, float x2, float y2, SkColor color, float thickness);
 };
 
 // todo: nest inside of FontCache (std::hash is giving me some trouble)
@@ -53,7 +74,6 @@ struct FontInfo {
 
 	bool operator==(const FontInfo& other) const noexcept;
 };
-
 
 template<>
 struct std::hash<FontInfo> {
@@ -68,14 +88,14 @@ struct FontType {
 };
 
 class FontCache {
-	std::unordered_map<FontInfo, SkFont> m_fonts;
+	std::unordered_map<FontInfo, std::shared_ptr<SkFont>> m_fonts;
 	std::unordered_map<std::string, FontType> m_font_types;
 
 public:
 	FontCache();
 	void add_type(std::string name, FontType type);
 
-	SkFont& get_font(std::string const& name, size_t size, bool bold, bool italic);
+	std::shared_ptr<SkFont> get_font(std::string const& name, size_t size, bool bold, bool italic);
 };
 
 enum class LayoutMode {
@@ -98,50 +118,57 @@ public:
 
 	std::vector<std::shared_ptr<Node>> m_nodes;
 	std::weak_ptr<LayoutBase> m_parent;
-	std::vector<std::shared_ptr<BlockLayout>> m_children;
+	std::vector<std::shared_ptr<LayoutBase>> m_children;
 
 	LayoutBase(std::vector<std::shared_ptr<Node>> nodes, std::weak_ptr<LayoutBase> parent);
 	void print_layout(int indent = 0);
+	virtual void layout(FontCache& font_cache) = 0;
 	virtual void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const = 0;
 	virtual ~LayoutBase() = default;
 };
 
-struct StringPosition {
-	float left;
-	// filled in later
-	float top = -1;
-	float width;
-	std::string text;
-	SkFont font;
-	bool is_super_text;
-	SkColor color;
+struct TextLayout : public LayoutBase {
+	std::weak_ptr<LayoutBase> m_previous;
+	std::string m_word;
+	std::shared_ptr<SkFont> m_font;
+
+	TextLayout(std::vector<std::shared_ptr<Node>> nodes, std::string word, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous);
+	void layout(FontCache& font_cache) override;
+	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
+};
+
+class LineLayout : public LayoutBase {
+	std::weak_ptr<LayoutBase> m_previous;
+
+public:
+	LineLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous);
+	void layout(FontCache& font_cache) override;
+	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 };
 
 class BlockLayout : public LayoutBase {
-	std::vector<StringPosition> m_display_list;
 	float m_cursor_x = 0;
-	float m_cursor_y = 0;
 	bool m_in_sup = false;
-	std::vector<StringPosition> m_line;
 
 	std::weak_ptr<BlockLayout> m_previous;
 
 public:
 	BlockLayout(std::vector<std::shared_ptr<Node>> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
-	void layout(FontCache& font_cache);
+	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 
 private:
-	void recurse(Node const& node, FontCache& font_cache);
-	void word(std::string_view word, Node const& node, SkFont& font);
-	void flush();
+	void recurse(std::shared_ptr<Node> node, FontCache& font_cache);
+	void word(std::string_view word, std::shared_ptr<Node> node, SkFont& font);
+	void new_line();
 	LayoutMode layout_mode() const;
 };
 
 class DocumentLayout : public LayoutBase {
+	float m_screen_width;
 public:
-	DocumentLayout(std::shared_ptr<Node> node);
-	void layout(FontCache& font_cache, float screen_width);
+	DocumentLayout(std::shared_ptr<Node> node, float screen_width);
+	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 };
 

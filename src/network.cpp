@@ -223,9 +223,21 @@ URL URL::cachable_subsection() const {
 }
 
 // todo: operator overload
+// todo: remove `//` for about and relative file URLs
 std::string URL::to_string() const {
 	const char *source = (view_source) ? "view-source:" : "";
-	return source + scheme + "://" + host + ":" + std::to_string(port) + path;
+	std::string port_string = [&]() {
+		if (scheme == "https" && port == 443) {
+			return std::string{};
+		} else if (scheme == "http" && port == 80) {
+			return std::string{};
+		} else if (scheme == "file" || scheme == "data" || scheme == "about") {
+			return std::string{};
+		} else {
+			return ":" + std::to_string(port);
+		}
+	}();
+	return source + scheme + "://" + host + port_string + path;
 }
 
 std::size_t std::hash<URL>::operator()(const URL& u) const noexcept {
