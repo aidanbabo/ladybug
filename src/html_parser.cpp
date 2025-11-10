@@ -132,7 +132,6 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 	std::string prop;
 	std::unordered_map<std::string, std::string> attributes;
 	std::string_view remainder = parts.size() > 1 ? parts[1] : std::string_view{};
-	// todo: bug parsing attributes like `defer=""`
 	for (char c : remainder) {
 		if (c == '"') {
 			in_quotes = !in_quotes;
@@ -158,7 +157,9 @@ std::pair<std::string, std::unordered_map<std::string, std::string>> HTMLParser:
 		prop = buf;
 		buf.clear();
 	}
-	attributes[prop] = buf;
+	if (!prop.empty()) {
+		attributes[prop] = buf;
+	}
 
 	return { tag, attributes };
 }
@@ -311,7 +312,17 @@ void print_node(Node const& node, int indent) {
 		std::cout << text.text;
 	} else if (node.type == NodeType::Element) {
 		auto tag = static_cast<Element const&>(node);
-		std::cout << "<" << tag.tag << ">";
+		std::cout << "<" << tag.tag;
+		for (auto const& attr : tag.attributes) {
+			if (attr.first == "style") {
+				continue;
+			}
+			std::cout << " " << attr.first;
+			if (!attr.second.empty()) {
+				std::cout << "=\"" << attr.second << "\"";
+			}
+		}
+		std::cout << "> ";
 	}
 
 	std::cout << "{";

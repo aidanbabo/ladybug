@@ -15,6 +15,7 @@ add_executable(ladybug
 	src/layout.cpp
 	src/html_parser.cpp
 	src/css_parser.cpp
+	src/draw.cpp
 )
 
 target_link_libraries(ladybug PRIVATE z ssl crypto)

@@ -73,86 +73,6 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 }
 
 
-DrawCommand::DrawCommand(float left, float top, float right, float bottom)
-	: left(left)
-	, top(top)
-	, right(right)
-	, bottom(bottom)
-{}
-
-DrawText::DrawText(float left, float top, float right, float bottom, std::string text, std::shared_ptr<SkFont> font, SkColor color)
-	: DrawCommand(left, top, right, bottom)
-	, text(text)
-	, font(font)
-	, color(color)
-{}
-
-std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, std::string text, std::shared_ptr<SkFont> font, SkColor color) {
-	SkFontMetrics m;
-	font->getMetrics(&m);
-	// todo: leading?
-	float bottom = top + m.fDescent - m.fAscent;
-	return std::make_shared<DrawText>(left, top, left + width, bottom, text, font, color);
-}
-
-void DrawText::execute(float scroll, SkCanvas& canvas) {
-	SkPaint paint;
-	paint.setColor(color);
-	canvas.drawString(text.c_str(), left, top - scroll, *font, paint);
-}
-
-DrawRect::DrawRect(float left, float top, float right, float bottom, SkColor color)
-	: DrawCommand(left, top, right, bottom)
-	, color(color)
-{}
-
-std::shared_ptr<DrawRect> DrawRect::createLTRB(float left, float top, float right, float bottom, SkColor color) {
-	return std::make_shared<DrawRect>(left, top, right, bottom, color);
-}
-
-void DrawRect::execute(float scroll, SkCanvas& canvas) {
-	SkRect rect = SkRect::MakeLTRB(left, top - scroll, right, bottom - scroll);
-	SkPaint paint;
-	paint.setColor(color);
-	canvas.drawRect(rect, paint);
-}
-
-DrawOutline::DrawOutline(SkRect rect, SkColor color, float thickness)
-	: DrawCommand(rect.fLeft, rect.fTop, rect.fRight, rect.fBottom)
-	, color(color)
-	, thickness(thickness)
-{}
-
-std::shared_ptr<DrawOutline> DrawOutline::create(SkRect rect, SkColor color, float thickness) {
-	return std::make_shared<DrawOutline>(rect, color, thickness);
-}
-
-void DrawOutline::execute(float scroll, SkCanvas& canvas) {
-	SkRect rect = SkRect::MakeLTRB(left, top - scroll, right, bottom - scroll);
-	SkPaint paint;
-	paint.setColor(color);
-	paint.setStyle(SkPaint::kStroke_Style);
-	paint.setStrokeWidth(thickness);
-	canvas.drawRect(rect, paint);
-}
-
-DrawLine::DrawLine(float x1, float y1, float x2, float y2, SkColor color, float thickness)
-	: DrawCommand(x1, y1, x2, y2)
-	, color(color)
-	, thickness(thickness)
-{}
-
-std::shared_ptr<DrawLine> DrawLine::create(float x1, float y1, float x2, float y2, SkColor color, float thickness) {
-	return std::make_shared<DrawLine>(x1, y1, x2, y2, color, thickness);
-}
-
-void DrawLine::execute(float scroll, SkCanvas& canvas) {
-	SkPaint paint;
-	paint.setColor(color);
-	paint.setStrokeWidth(thickness);
-	canvas.drawLine(SkPoint::Make(left, top - scroll), SkPoint::Make(right, bottom - scroll), paint);
-}
-
 bool FontInfo::operator==(const FontInfo& other) const noexcept {
 	return size == other.size && bold == other.bold && italic == other.italic && name == other.name;
 }
@@ -236,12 +156,7 @@ void LayoutBase::print_layout(int indent) {
 		if (auto text = dynamic_cast<TextLayout *>(this)) {
 			std::cout << "Text: " << text->m_word;
 		} else if (dynamic_cast<LineLayout *>(this)) {
-			if (this->m_children.empty()) {
-				// todo: shouldn't happen?
-				std::cout << "EMPTY Line";
-			} else {
-				std::cout << "Line: ";
-			}
+			std::cout << "Line: ";
 		} else if (dynamic_cast<BlockLayout *>(this)) {
 			if (node->type == NodeType::Text) {
 				std::cout << "<no element>";
@@ -287,7 +202,6 @@ void TextLayout::layout(FontCache& font_cache) {
 	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
 	size = static_cast<float>(size) * 0.75;
 
-	// todo: address of reference?
 	m_font = font_cache.get_font(font_family, size, is_bold, is_italic);
 
 	m_width = m_font->measureText(m_word.data(), m_word.size(), SkTextEncoding::kUTF8);
@@ -308,7 +222,7 @@ void TextLayout::layout(FontCache& font_cache) {
 void TextLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
 	auto color_str { m_nodes[0]->styles["color"] };
 	auto color { parse_color(color_str).value_or(SK_ColorBLACK) };
-	auto cmd { DrawText::create(m_x, m_y, m_width, m_word, m_font, color) };
+	auto cmd { DrawText::create(m_x, m_y, m_width, m_height, m_word, m_font, color) };
 	commands.push_back(cmd);
 }
 
@@ -326,7 +240,7 @@ void LineLayout::layout(FontCache& font_cache) {
 		m_y = m_parent.lock()->m_y;
 	}
 	if (m_children.empty()) {
-		std::cerr << "Empty line layout" << std::endl;
+		// todo: give it the height of the text that surrounds it? it's sort of unclear how to do that.
 		m_height = 0;
 		return;
 	}
@@ -335,17 +249,15 @@ void LineLayout::layout(FontCache& font_cache) {
 		word->layout(font_cache);
 	}
 
-
 	std::vector<SkFontMetrics> metrics(m_children.size());
 	std::transform(m_children.begin(), m_children.end(), metrics.begin(), [](auto const& child) {
 		auto text = dynamic_cast<TextLayout const*>(&*child);
-		assert(text != nullptr && "Children should only be text nodes"); // todo:
+		assert(text != nullptr && "Children should only be text nodes");
 		SkFontMetrics m;
 		text->m_font->getMetrics(&m);
 		return m;
 	});
 
-	// todo: we crash here if we have an empty line layout, we shouldn't have empty line layouts
 	auto ascents = std::views::transform(metrics, &SkFontMetrics::fAscent);
 	// ascent in skia is typically a negative number, but for Tk it's positive...
 	float max_ascent = -std::ranges::min(ascents);
@@ -500,23 +412,12 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 	for (auto const& node : m_nodes) {
 		if (node->type == NodeType::Element) {
 			auto element = static_cast<Element const&>(*node);
-			if (element.tag == "nav") {
-				// todo: change all finds to contains if appropriate
-				// todo: implement class selectors?
-				/*
-				if (auto class_ = element.attributes.find("class"); class_ != element.attributes.end() && class_->second == "links") {
-					std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, *parse_color("lightgray"));
-					commands.push_back(rect);
-				}
-				*/
-			}
-
 			auto bgcolor_iter = element.styles.find("background-color");
 			std::string bgcolor = (bgcolor_iter != element.styles.end()) ? bgcolor_iter->second : std::string{ "transparent" };
 			if (bgcolor != "transparent") {
 				auto color = parse_color(bgcolor);
 				if (color) {
-					auto rect = DrawRect::createLTRB(m_x, m_y, m_x + m_width, m_y + m_height, *color);
+					auto rect = DrawRect::create(SkRect::MakeLTRB(m_x, m_y, m_x + m_width, m_y + m_height), *color);
 					commands.push_back(rect);
 				}
 			}
@@ -525,11 +426,11 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 				constexpr float LI_BULLET_SIZE = ((float)VSTEP) / 3.0;
 				constexpr float VERTICAL_SPACING = VSTEP - LI_BULLET_SIZE;
 				constexpr float HORIZONTAL_SPACING = LI_BULLET_SPACING - LI_BULLET_SIZE;
-				std::shared_ptr<DrawCommand> rect = DrawRect::createLTRB(
+				std::shared_ptr<DrawCommand> rect = DrawRect::create(SkRect::MakeLTRB(
 					m_x - 0.5 * HORIZONTAL_SPACING - LI_BULLET_SIZE,
 					m_y + 0.5 * VERTICAL_SPACING,
 					m_x - 0.5 * HORIZONTAL_SPACING,
-					m_y + 0.5 * VERTICAL_SPACING + LI_BULLET_SIZE,
+					m_y + 0.5 * VERTICAL_SPACING + LI_BULLET_SIZE),
 					SK_ColorBLACK);
 				commands.push_back(rect);
 			}
@@ -566,23 +467,17 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 		}
 	} else if (node->type == NodeType::Element) {
 		Element const& element = static_cast<Element const&>(*node);
-		/* todo:
 		if (element.tag == "br") {
-			flush();
+			new_line();
 		}
-		*/
 		for (auto child : element.children) {
 			recurse(child, font_cache);
 		}
-		/* todo:
 		if (element.tag == "p") {
-			// todo: move to css?
-			flush();
-			// todo: i don't know if this is in the book at this point
-			// why do we still need it?
-			m_cursor_y += VSTEP;
+			// todo: move to css? margin bottom?
+			//new_line();
+			//m_cursor_y += VSTEP;
 		}
-		*/
 	} else {
 		assert(false && "unreachable");
 	}

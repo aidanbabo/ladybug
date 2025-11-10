@@ -6,6 +6,7 @@ big { font-size: 110%; }
 pre { background-color: gray; }
 code { font-family: 'courier new'; }
 h1.title { text-align: center; }
+nav.links { background-color: lightgray }
 
 html { display: block; }
 body { display: block; }

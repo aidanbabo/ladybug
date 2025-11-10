@@ -3,66 +3,10 @@
 #include <vector>
 #include <unordered_map>
 
+#include "draw.hpp"
 #include "parsers.hpp"
 #include "include/core/SkFont.h"
 #include "include/core/SkCanvas.h"
-
-// todo: move to it's own hpp-cpp pair
-struct DrawCommand {
-	float left;
-	float top;
-	float right;
-	float bottom;
-
-	virtual void execute(float scroll, SkCanvas& canvas) = 0;
-	virtual ~DrawCommand() = default;
-	DrawCommand(float left, float top, float right, float bottom);
-};
-
-struct DrawText : public DrawCommand {
-	// todo: support unicode
-	std::string text;
-	std::shared_ptr<SkFont> font;
-	SkColor color;
-
-	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, std::shared_ptr<SkFont> font, SkColor color);
-
-	void execute(float scroll, SkCanvas& canvas) override;
-
-	DrawText(float left, float top, float right, float bottom, std::string text, std::shared_ptr<SkFont> font, SkColor color);
-};
-
-struct DrawRect : public DrawCommand {
-	SkColor color;
-
-	static std::shared_ptr<DrawRect> createLTRB(float left, float top, float right, float bottom, SkColor color);
-
-	void execute(float scroll, SkCanvas& canvas) override;
-
-	DrawRect(float left, float top, float right, float bottom, SkColor color);
-};
-
-struct DrawOutline : public DrawCommand {
-	SkColor color;
-	float thickness;
-
-	static std::shared_ptr<DrawOutline> create(SkRect rect, SkColor color, float thickness);
-
-	void execute(float scroll, SkCanvas& canvas) override;
-
-	DrawOutline(SkRect rect, SkColor color, float thickness);
-};
-
-struct DrawLine : public DrawCommand {
-	SkColor color;
-	float thickness;
-
-	static std::shared_ptr<DrawLine> create(float x1, float y1, float x2, float y2, SkColor color, float thickness);
-
-	void execute(float scroll, SkCanvas& canvas) override;
-
-	DrawLine(float x1, float y1, float x2, float y2, SkColor color, float thickness);
-};
 
 // todo: nest inside of FontCache (std::hash is giving me some trouble)
 struct FontInfo {
