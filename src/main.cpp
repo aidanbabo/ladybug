@@ -117,7 +117,6 @@ public:
 		std::string body = m_connection_manager.request(url);
 		m_nodes = HTMLParser(body).parse();
 		assert(m_nodes->type == NodeType::Element);
-		// todo: This is supposed to be a copy (from reference) does this happen?
 		StyleSheet rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;
 		html_tree_to_list(m_nodes, nodes);
@@ -128,7 +127,7 @@ public:
 				continue;
 			}
 			auto element = static_cast<Element const&>(*node);
-			if (element.tag == "style") {
+			if (element.tag == "style" && !element.children.empty()) {
 				Node const& child = *element.children[0];
 				if (child.type == NodeType::Text) {
 					auto text = static_cast<Text const&>(child);
@@ -158,7 +157,6 @@ public:
 						return std::nullopt;
 					}
 
-					// todo: handle errors fr
 					auto body = m_connection_manager.request(*style_url);
 					return body;
 				} else {
@@ -337,7 +335,7 @@ class Chrome {
 	friend class Browser;
 
 public:
-	// todo: handle resize
+	// todo: handle resize (currently nothing reasonable comes to mind
 	Chrome(FontCache& font_cache, int width) {
 		m_width = width;
 		m_font = font_cache.get_font("times", 20, false, false);
@@ -467,7 +465,6 @@ public:
 
 		std::vector<uint8_t> pixels(m_height * m_width * 4);
 		if (!image->readPixels(m_surface_info, pixels.data(), row_bytes, 0, 0)) {
-			// todo: error
 			assert(false);
 		}
 

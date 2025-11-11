@@ -1,46 +1,12 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <unordered_map>
 
 #include "draw.hpp"
 #include "parsers.hpp"
+#include "font_cache.hpp"
 #include "include/core/SkFont.h"
 #include "include/core/SkCanvas.h"
-
-// todo: nest inside of FontCache (std::hash is giving me some trouble)
-struct FontInfo {
-	// todo: find a way to remove this super bloat!
-	std::string name;
-	size_t size;
-	bool bold;
-	bool italic;
-
-	bool operator==(const FontInfo& other) const noexcept;
-};
-
-template<>
-struct std::hash<FontInfo> {
-	size_t operator()(const FontInfo& f) const noexcept;
-};
-
-struct FontType {
-	sk_sp<SkTypeface> normal;
-	sk_sp<SkTypeface> bold;
-	sk_sp<SkTypeface> italic;
-	sk_sp<SkTypeface> bold_italic;
-};
-
-class FontCache {
-	std::unordered_map<FontInfo, std::shared_ptr<SkFont>> m_fonts;
-	std::unordered_map<std::string, FontType> m_font_types;
-
-public:
-	FontCache();
-	void add_type(std::string name, FontType type);
-
-	std::shared_ptr<SkFont> get_font(std::string const& name, size_t size, bool bold, bool italic);
-};
 
 enum class LayoutMode {
 	Inline,
@@ -51,10 +17,7 @@ class BlockLayout;
 
 // hack to have a shared_ptr as a receiver (almost)
 // todo: no more constructors, only factories that use shared
-class LayoutBase : public std::enable_shared_from_this<LayoutBase> {
-// todo: make protected, why doesn't it work?
-// pass key idiom seems to be the only way? kinda gross!
-public:
+struct LayoutBase : public std::enable_shared_from_this<LayoutBase> {
 	float m_x = -1;
 	float m_y = -1;
 	float m_width = -1;

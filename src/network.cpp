@@ -688,6 +688,7 @@ struct CachedHttpResponse {
 ConnectionManager::ConnectionManager() = default;
 ConnectionManager::~ConnectionManager() = default;
 
+// todo: allow for errors
 std::string ConnectionManager::request(URL url) {
 	std::string response;
 	if (url.scheme == "file") {

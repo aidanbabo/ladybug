@@ -73,59 +73,6 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 }
 
 
-bool FontInfo::operator==(const FontInfo& other) const noexcept {
-	return size == other.size && bold == other.bold && italic == other.italic && name == other.name;
-}
-
-size_t std::hash<FontInfo>::operator()(const FontInfo& f) const noexcept {
-	size_t seed = 0;
-	combine_hash(seed, std::hash<std::string>{}(f.name));
-	combine_hash(seed, std::hash<size_t>{}(f.size));
-	combine_hash(seed, std::hash<bool>{}(f.bold));
-	combine_hash(seed, std::hash<bool>{}(f.italic));
-	return seed;
-}
-
-FontCache::FontCache() : m_fonts() {}
-
-void FontCache::add_type(std::string name, FontType type) {
-	m_font_types.insert({name, type});
-}
-
-std::shared_ptr<SkFont> FontCache::get_font(std::string const& name, size_t size, bool bold, bool italic) {
-	auto info = FontInfo {
-		.name = name,
-		.size = size,
-		.bold = bold,
-		.italic = italic,
-	};
-	if (auto f = m_fonts.find(info); f != m_fonts.end()) {
-		return f->second;
-	}
-
-	auto font_type = m_font_types.find(name);
-	if (font_type == m_font_types.end()) {
-		std::cerr << "Unsupported font " << name << std::endl;
-		font_type = m_font_types.find("times");
-		assert(font_type != m_font_types.end());
-	}
-	sk_sp<SkTypeface> typeface = [&] {
-		if (!bold && !italic) {
-			return font_type->second.normal;
-		} else if (bold && !italic) {
-			return font_type->second.bold;
-		} else if (!bold && italic) {
-			return font_type->second.italic;
-		} else if (bold && italic) {
-			return font_type->second.bold_italic;
-		} else {
-			assert(false && "unreachable");
-		}
-	}();
-	m_fonts[info] = std::make_shared<SkFont>(typeface, size);
-	return m_fonts[info];
-}
-
 constexpr std::array TEXT_LIKE_ELEMENTS = { "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
 constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 
@@ -197,8 +144,9 @@ void TextLayout::layout(FontCache& font_cache) {
 		is_italic = true;
 	}
 
-	std::string font_family = m_nodes[0]->styles.find("font-family")->second;
+	std::string_view font_family { m_nodes[0]->styles.find("font-family")->second };
 	std::string_view size_str { m_nodes[0]->styles.find("font-size")->second };
+	// todo: no alloc, no exception, add someting like this to utils?
 	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
 	size = static_cast<float>(size) * 0.75;
 
@@ -452,7 +400,7 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 			is_italic = true;
 		}
 
-		std::string font_family = text.styles.find("font-family")->second;
+		std::string_view font_family { text.styles.find("font-family")->second };
 		std::string_view size_str { text.styles.find("font-size")->second };
 		size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
 		size = static_cast<float>(size) * 0.75;
@@ -517,11 +465,9 @@ void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont
 			auto line = m_children.back();
 			auto previous_word = line->m_children.empty() ? nullptr : line->m_children.back();
 			auto text = std::make_shared<TextLayout>(std::vector{node}, std::move(word_to_render), line, previous_word);
-			// todo: save font info? we have to recompute it in TextLayout::layout()
 			line->m_children.push_back(text);
 			//m_line.push_back(pos);
 
-			// todo: other text encodings
 			m_cursor_x += w + font.measureText(" ", 1, SkTextEncoding::kUTF8);
 
 			// Optimization: If there is more work, it is because this line is full, so we must flush anyway!

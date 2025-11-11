@@ -58,13 +58,15 @@ bool ClassSelector::matches(Node const& node) {
 	}
 	auto element = static_cast<Element const&>(node);
 	if (auto class_attr = element.attributes.find("class"); class_attr != element.attributes.end()) {
-		// todo: no need to alloc
-		auto classes = split_on_any(class_attr->second);
-		for (auto const& c : classes) {
-			if (c == class_) {
+		std::string_view classes { class_attr->second };
+		size_t space;
+		do {
+			space = classes.find(' ');
+			if (class_ == classes.substr(0, space)) {
 				return true;
 			}
-		}
+			classes = classes.substr(space + 1);
+		} while (space != std::string::npos);
 	}
 	return false;
 }

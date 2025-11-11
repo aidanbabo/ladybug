@@ -11,7 +11,6 @@ struct DrawCommand {
 };
 
 struct DrawText : public DrawCommand {
-	// todo: support unicode
 	std::string text;
 	std::shared_ptr<SkFont> font;
 	SkColor color;
