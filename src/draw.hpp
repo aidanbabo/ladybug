@@ -22,6 +22,7 @@ struct DrawText : public DrawCommand {
 	void execute(float scroll, SkCanvas& canvas) override;
 
 	DrawText(SkRect rect, std::string text, std::shared_ptr<SkFont> font, SkColor color);
+	~DrawText() = default;
 };
 
 struct DrawRect : public DrawCommand {
@@ -32,6 +33,7 @@ struct DrawRect : public DrawCommand {
 	void execute(float scroll, SkCanvas& canvas) override;
 
 	DrawRect(SkRect rect, SkColor color);
+	~DrawRect() = default;
 };
 
 struct DrawOutline : public DrawCommand {
@@ -43,6 +45,7 @@ struct DrawOutline : public DrawCommand {
 	void execute(float scroll, SkCanvas& canvas) override;
 
 	DrawOutline(SkRect rect, SkColor color, float thickness);
+	~DrawOutline() = default;
 };
 
 struct DrawLine : public DrawCommand {
@@ -54,4 +57,5 @@ struct DrawLine : public DrawCommand {
 	void execute(float scroll, SkCanvas& canvas) override;
 
 	DrawLine(float x1, float y1, float x2, float y2, SkColor color, float thickness);
+	~DrawLine() = default;
 };

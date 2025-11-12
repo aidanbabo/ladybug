@@ -263,22 +263,26 @@ public:
 		if (objs.empty()) {
 			return;
 		}
-		assert(objs.back()->m_nodes.size() == 1);
-		Node const *elt = &*objs.back()->m_nodes[0];
-		while (elt != nullptr) {
-			if (elt->type == NodeType::Element) {
-				auto el = static_cast<Element const*>(elt);
-				// this nesting is crazy
-				if (el->tag == "a") {
-					if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
-						if (auto url = m_url.resolve(href->second)) {
-							load(*url, font_cache);
-							return;
+		// todo: this is a hack so we can only click on text elements AND so that we
+		// don't have to make a virtual function to get the current node from an element
+		// since BlockLayouts can have multiple nodes.
+		if (auto text = dynamic_cast<TextLayout *>(&*objs.back())) {
+			Node const *elt = &*text->m_node;
+			while (elt != nullptr) {
+				if (elt->type == NodeType::Element) {
+					auto el = static_cast<Element const*>(elt);
+					// this nesting is crazy
+					if (el->tag == "a") {
+						if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
+							if (auto url = m_url.resolve(href->second)) {
+								load(*url, font_cache);
+								return;
+							}
 						}
 					}
 				}
+				elt = &*elt->parent.lock();
 			}
-			elt = &*elt->parent.lock();
 		}
 	}
 

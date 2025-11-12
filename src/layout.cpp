@@ -73,7 +73,7 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 }
 
 
-constexpr std::array TEXT_LIKE_ELEMENTS = { "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
+constexpr std::array TEXT_LIKE_ELEMENTS = { "a", "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
 constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 
 static std::optional<float> parse_pixels(std::string_view s) {
@@ -88,35 +88,17 @@ static std::optional<float> parse_pixels(std::string_view s) {
 }
 
 
-LayoutBase::LayoutBase(std::vector<std::shared_ptr<Node>> nodes, std::weak_ptr<LayoutBase> parent)
-	: m_nodes(nodes)
-	, m_parent(parent)
+LayoutBase::LayoutBase(std::weak_ptr<LayoutBase> parent)
+	: m_parent(parent)
 {}
 
-void LayoutBase::print_layout(int indent) {
+void LayoutBase::print_layout(int indent) const {
 	for (int i = 0; i < indent; i++) {
 		std::cout << " ";
 	}
 	std::cout << "{x:" << m_x << ",y:" << m_y << ",w:" << m_width << ",h:" << m_height << "} ";
 
-	for (auto node : m_nodes) {
-		if (auto text = dynamic_cast<TextLayout *>(this)) {
-			std::cout << "Text: " << text->m_word;
-		} else if (dynamic_cast<LineLayout *>(this)) {
-			std::cout << "Line: ";
-		} else if (dynamic_cast<BlockLayout *>(this)) {
-			if (node->type == NodeType::Text) {
-				std::cout << "<no element>";
-			} else {
-				auto element = static_cast<Element const&>(*node);
-				std::cout << "<" << element.tag << ">";
-			}
-		} else if (dynamic_cast<DocumentLayout *>(this)) {
-			std::cout << "Document: ";
-		} else {
-			assert("unreachable");
-		}
-	}
+	this->print();
 	std::cout << std::endl;
 
 	for (auto const& child : m_children) {
@@ -124,28 +106,49 @@ void LayoutBase::print_layout(int indent) {
 	}
 }
 
-TextLayout::TextLayout(std::vector<std::shared_ptr<Node>> nodes, std::string word, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
-	: LayoutBase(nodes, parent)
-	, m_previous(previous)
-	, m_word(word)
-{
-	// text can't be on multiple nodes
-	assert(m_nodes.size() == 1);
+void TextLayout::print() const {
+	std::cout << "Text: " << m_word;
 }
+
+void LineLayout::print() const {
+	std::cout << "Line: ";
+}
+
+void BlockLayout::print() const {
+	for (auto node : m_nodes) {
+		if (node->type == NodeType::Text) {
+			std::cout << "<no element> ";
+		} else {
+			auto element = static_cast<Element const&>(*node);
+			std::cout << "<" << element.tag << "> ";
+		}
+	}
+}
+
+void DocumentLayout::print() const {
+	std::cout << "Document: ";
+}
+
+TextLayout::TextLayout(std::shared_ptr<Node> node, std::string word, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
+	: LayoutBase(parent)
+	, m_node(std::move(node))
+	, m_previous(previous)
+	, m_word(std::move(word))
+{}
 
 void TextLayout::layout(FontCache& font_cache) {
 	bool is_bold = false;
-	if (m_nodes[0]->styles.find("font-weight")->second == "bold") {
+	if (m_node->styles.find("font-weight")->second == "bold") {
 		is_bold = true;
 	}
 
 	bool is_italic = false;
-	if (m_nodes[0]->styles.find("font-style")->second == "italic") {
+	if (m_node->styles.find("font-style")->second == "italic") {
 		is_italic = true;
 	}
 
-	std::string_view font_family { m_nodes[0]->styles.find("font-family")->second };
-	std::string_view size_str { m_nodes[0]->styles.find("font-size")->second };
+	std::string_view font_family { m_node->styles.find("font-family")->second };
+	std::string_view size_str { m_node->styles.find("font-size")->second };
 	// todo: no alloc, no exception, add someting like this to utils?
 	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
 	size = static_cast<float>(size) * 0.75;
@@ -168,14 +171,15 @@ void TextLayout::layout(FontCache& font_cache) {
 }
 
 void TextLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
-	auto color_str { m_nodes[0]->styles["color"] };
+	auto color_str { m_node->styles["color"] };
 	auto color { parse_color(color_str).value_or(SK_ColorBLACK) };
 	auto cmd { DrawText::create(m_x, m_y, m_width, m_height, m_word, m_font, color) };
 	commands.push_back(cmd);
 }
 
-LineLayout::LineLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
-	: LayoutBase(nodes, parent)
+LineLayout::LineLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
+	: LayoutBase(parent)
+	, m_node(node)
 	, m_previous(previous)
 {}
 
@@ -228,7 +232,8 @@ void LineLayout::paint(std::vector<std::shared_ptr<DrawCommand>>&) const
 {}
 
 BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous)
-	: LayoutBase(nodes, parent)
+	: LayoutBase(parent)
+	, m_nodes(nodes)
 	, m_previous(previous)
 {
 	assert(!m_parent.expired());
@@ -336,7 +341,7 @@ void BlockLayout::layout(FontCache& font_cache) {
 			m_children.push_back(next);
 		}
 	} else if (mode == LayoutMode::Inline) {
-		new_line();
+		new_line(m_nodes[0]);
 		for (auto node : m_nodes) {
 			recurse(node, font_cache);
 		}
@@ -419,14 +424,14 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 	} else if (node->type == NodeType::Element) {
 		Element const& element = static_cast<Element const&>(*node);
 		if (element.tag == "br") {
-			new_line();
+			new_line(node);
 		}
 		for (auto child : element.children) {
 			recurse(child, font_cache);
 		}
 		if (element.tag == "p") {
 			// todo: move to css? margin bottom?
-			//new_line();
+			//new_line(node);
 			//m_cursor_y += VSTEP;
 		}
 	} else {
@@ -467,7 +472,7 @@ void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont
 			assert(!m_children.empty());
 			auto line = m_children.back();
 			auto previous_word = line->m_children.empty() ? nullptr : line->m_children.back();
-			auto text = std::make_shared<TextLayout>(std::vector{node}, std::move(word_to_render), line, previous_word);
+			auto text = std::make_shared<TextLayout>(node, std::move(word_to_render), line, previous_word);
 			line->m_children.push_back(text);
 			//m_line.push_back(pos);
 
@@ -476,7 +481,7 @@ void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont
 			// Optimization: If there is more work, it is because this line is full, so we must flush anyway!
 			// This prevents us from trying to split the remaining string over and over when none of it will fit.
 			if (!hyphens_to_render_later.empty()) {
-				new_line();
+				new_line(node);
 			}
 			// When there are no leftovers here we will exit the loop.
 			soft_hyphen_split = hyphens_to_render_later;
@@ -487,7 +492,7 @@ void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont
 			hyphens_to_render_later.insert(hyphens_to_render_later.begin(), v);
 		} else {
 			// The word didn't fit and we couldn't split it, so we flush and try the next line.
-			new_line();
+			new_line(node);
 			soft_hyphen_split.insert(soft_hyphen_split.end(), hyphens_to_render_later.begin(), hyphens_to_render_later.end());
 			hyphens_to_render_later = {};
 		}
@@ -498,10 +503,10 @@ void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont
 	}
 }
 
-void BlockLayout::new_line() {
+void BlockLayout::new_line(std::shared_ptr<Node> node) {
 	m_cursor_x = 0;
 	auto last_line = m_children.empty() ? nullptr : m_children.back();
-	auto new_line = std::make_shared<LineLayout>(std::vector{m_nodes}, shared_from_this(), last_line);
+	auto new_line = std::make_shared<LineLayout>(node, shared_from_this(), last_line);
 	m_children.push_back(new_line);
 }
 
@@ -528,14 +533,14 @@ void BlockLayout::new_line() {
 	*/
 
 DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, float screen_width)
-	: LayoutBase(std::vector{node}, std::weak_ptr<LayoutBase>())
+	: LayoutBase(std::weak_ptr<LayoutBase>())
+	, m_node(node)
 	, m_screen_width(screen_width)
 {}
 
 void DocumentLayout::layout(FontCache& font_cache) {
 	std::shared_ptr<LayoutBase> shared = shared_from_this();
-	assert(m_nodes.size() == 1);
-	auto child = std::make_shared<BlockLayout>(m_nodes, shared, std::weak_ptr<BlockLayout>());
+	auto child = std::make_shared<BlockLayout>(std::vector{m_node}, shared, std::weak_ptr<BlockLayout>());
 	m_children.push_back(child);
 	m_x = HSTEP;
 	m_y = VSTEP;

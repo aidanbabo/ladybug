@@ -72,6 +72,7 @@ struct TagSelector : public Selector {
 
 	explicit TagSelector(std::string tag);
 	bool matches(Node const& node) override;
+	~TagSelector() = default;
 };
 
 struct DescendantSelector : public Selector {
@@ -83,6 +84,7 @@ struct DescendantSelector : public Selector {
 
 	explicit DescendantSelector(std::vector<std::shared_ptr<Selector>> selectors);
 	bool matches(Node const& node) override;
+	~DescendantSelector() = default;
 };
 
 struct ClassSelector : public Selector {
@@ -90,6 +92,7 @@ struct ClassSelector : public Selector {
 
 	explicit ClassSelector(std::string class_);
 	bool matches(Node const& node) override;
+	~ClassSelector() = default;
 };
 
 struct SequenceSelector : public Selector {
@@ -98,6 +101,7 @@ struct SequenceSelector : public Selector {
 
 	SequenceSelector(TagSelector tag, std::vector<ClassSelector> classes);
 	bool matches(Node const& node) override;
+	~SequenceSelector() = default;
 };
 
 class CSSParser {
