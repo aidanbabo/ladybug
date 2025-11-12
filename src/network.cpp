@@ -690,33 +690,32 @@ private:
 
 struct CachedHttpResponse {
 	HttpResponse response;
-	std::time_t expires_at;
+	std::optional<std::time_t> expires_at;
 };
 
 ConnectionManager::ConnectionManager() = default;
 ConnectionManager::~ConnectionManager() = default;
 
-// todo: allow for errors
-std::string ConnectionManager::request(URL url) {
-	std::string response;
+std::optional<std::string> ConnectionManager::request(URL url) {
+	std::optional<std::string> response;
 	if (url.scheme == "file") {
 		response = load_file(url);
 	} else if (url.scheme == "data") {
 		response = url.path;
 	} else if (url.scheme == "http" || url.scheme == "https") {
-		response = load_from_cache_or_fetch(url);
+		response = load_http_or_from_cache(url);
 	} else if (url.scheme == "about") {
 		if (url.host == "blank") {
 			response = "";
 		} else {
-			assert(false && "unreachable");
+			std::cerr << "Unsupported about url" << std::endl;
 		}
 	} else {
 		assert(false && "unreachable");
 	}
 
-	if (url.view_source) {
-		return escape(response);
+	if (url.view_source && response) {
+		return escape(*response);
 	} else {
 		return response;
 	}
@@ -728,79 +727,88 @@ void ConnectionManager::print_active_connections() const {
 	}
 }
 
-std::string ConnectionManager::load_file(URL url) const {
-	if (auto content = read_entire_file_to_string(url.path)) {
-		return *content;
-	} else {
-		// todo: Default to about:blank
-		return std::string{};
-	}
+std::optional<std::string> ConnectionManager::load_file(URL url) const {
+	return read_entire_file_to_string(url.path);
 }
 
-std::string ConnectionManager::load_from_cache_or_fetch(URL url) {
-	// todo: custom hash impl? is this even worth?
+std::optional<std::string> ConnectionManager::try_load_from_cache(URL url) {
 	URL cachable_url = url.cachable_subsection();
 	if (auto cached = m_cached_responses.find(cachable_url); cached != m_cached_responses.end()) {
-		std::time_t now = std::time(nullptr);
-		if (now >= cached->second->expires_at) {
+		if (auto expires_at = cached->second->expires_at; expires_at && std::time(nullptr) >= *expires_at) {
 			m_cached_responses.erase(cached);
 		} else {
 			std::cerr << "Using cached response for " << cachable_url << std::endl;
 			return cached->second->response.body;
 		}
 	}
-	// todo: move caching to after this step?
-	return request_http(url);
+	return std::nullopt;
 }
 
-void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse response) {
+static std::pair<bool, std::optional<std::time_t>> response_is_cachable(HttpResponse const& response) {
 	// todo: add 301, 404, etc.
 	if (response.status != 200) {
-		return;
+		return { false, std::nullopt };
 	}
 
 	auto ctrl_header = response.headers.find("cache-control");
 	if (ctrl_header == response.headers.end()) {
-		return;
+		// fair game
+		return { true, std::nullopt };
 	}
 
 	std::vector<std::string_view> directives = split(ctrl_header->second, ",");
+	std::optional<uint64_t> max_age{};
 	for (auto d : directives) {
 		std::string_view directive = trim_whitespace(d);
 
 		if (directive == "no-store") {
-			std::cerr << "No store for " << url << std::endl;
-			return;
+			return { false, std::nullopt };
 		}
 
 		std::string_view header_start = "max-age=";
-		if (directive.rfind(header_start, 0) != 0) { // does not starts_with
-			// todo: handle other values
-			return;
+		// todo: handle other values
+		if (!directive.starts_with(header_start)) {
+			return { false, std::nullopt };
 		}
 
-		uint64_t max_age;
-		assert(std::from_chars(directive.data() + header_start.size(), directive.data() + directive.size(), max_age).ec == std::errc{});
+		assert(std::from_chars(directive.data() + header_start.size(), directive.data() + directive.size(), *max_age).ec == std::errc{});
+	}
 
+	if (max_age) {
 		uint64_t age = 0;
 		if (auto age_finder = response.headers.find("age"); age_finder != response.headers.end()) {
 			age = std::stol(age_finder->second);
 		}
 
-		std::time_t expires_at = std::time(nullptr) + max_age - age;
-
-		URL cachable_url = url.cachable_subsection();
-		auto cachable_response = std::make_unique<CachedHttpResponse>(CachedHttpResponse {
-			.response = response,
-			.expires_at = expires_at,
-		});
-		m_cached_responses.insert({cachable_url, std::move(cachable_response)});
+		std::time_t expires_at = std::time(nullptr) + *max_age - age;
+		return { true, expires_at };
+	} else {
+		return { true , std::nullopt };
 	}
+
 }
 
-std::string ConnectionManager::request_http(URL url) {
-	// redirect loop
+void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse response) {
+	auto [is_cachable, expires_at] = response_is_cachable(response);
+	if (!is_cachable) {
+		return;
+	}
+
+	URL cachable_url = url.cachable_subsection();
+	auto cachable_response = std::make_unique<CachedHttpResponse>(CachedHttpResponse {
+		.response = response,
+		.expires_at = expires_at,
+	});
+	m_cached_responses.insert({cachable_url, std::move(cachable_response)});
+}
+
+std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url) {
+	// Redirect loop.
 	for (int i = 0; i < 10; i++) {
+		if (auto content = try_load_from_cache(url)) {
+			return *content;
+		}
+
 		URL reusable_base = url.reusable_connection_subsection();
 		auto pair = m_active_connections.find(reusable_base);
 
@@ -827,7 +835,12 @@ std::string ConnectionManager::request_http(URL url) {
 		}();
 
 		HttpResponse response = connection->request(url);
+		std::cerr << response.status << " to " << url << std::endl;
+
+		store_in_cache_if_cachable(url, response);
+
 		if (response.status >= 300 && response.status < 400) {
+			// todo: Handle missing header.
 			std::string location = response.headers["location"];
 			if (location.rfind("/", 0) == 0) { // starts_with
 				url.path = location;
@@ -837,8 +850,6 @@ std::string ConnectionManager::request_http(URL url) {
 			std::cerr << "Redirected to " << url << std::endl;
 			continue;
 		}
-
-		store_in_cache_if_cachable(url, response);
 
 		return response.body;
 	}

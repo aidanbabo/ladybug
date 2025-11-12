@@ -111,11 +111,16 @@ class Tab {
 
 public:
 	void load(URL url, FontCache& font_cache) {
+		std::optional<std::string> body = m_connection_manager.request(url);
+		if (!body) {
+			std::cerr << "Failed to load new document" << std::endl;
+			return;
+		}
+
 		m_url = url;
 		m_history.push_back(url);
 		m_scroll = 0;
-		std::string body = m_connection_manager.request(url);
-		m_nodes = HTMLParser(body).parse();
+		m_nodes = HTMLParser(*body).parse();
 		assert(m_nodes->type == NodeType::Element);
 		StyleSheet rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;

@@ -284,6 +284,7 @@ std::shared_ptr<Node> HTMLParser::parse() {
 					if (tag.value()->tag == "script" && tag.value()->attributes.find("src") == tag.value()->attributes.end()) {
 						in_script = true;
 					}
+					// todo: add similar parsing fallthrough for style tags
 				}
 			}
 			buffer = "";

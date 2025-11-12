@@ -46,11 +46,11 @@ class ConnectionManager {
 public:
 	ConnectionManager();
 	~ConnectionManager();
-	std::string request(URL url);
+	std::optional<std::string> request(URL url);
 	void print_active_connections() const;
 private:
-	std::string load_file(URL url) const;
-	std::string load_from_cache_or_fetch(URL url);
+	std::optional<std::string> load_file(URL url) const;
+	std::optional<std::string> load_http_or_from_cache(URL url);
+	std::optional<std::string> try_load_from_cache(URL url);
 	void store_in_cache_if_cachable(URL url, HttpResponse response);
-	std::string request_http(URL url);
 };
