@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
-#include <fstream>
 #include <memory>
 #include <unordered_map>
 
@@ -100,9 +99,9 @@ static std::optional<URL> parse_standard_url(bool view_source, std::string schem
 		assert(false && "unreachable");
 	}
 
-	if (scheme == "file") {
-		assert(host == "");
-		assert(port == 0);
+	if (scheme == "file" && (!host.empty() || port == 0)) {
+		std::cerr << "`file` URL should have neither a host or port" << std::endl;
+		return std::nullopt;
 	}
 
 	return URL {
@@ -117,6 +116,7 @@ static std::optional<URL> parse_standard_url(bool view_source, std::string schem
 std::optional<URL> URL::create(std::string_view string) {
 	auto n = string.find(":");
 	if (n == std::string::npos) {
+		// todo: default to https
 		std::cerr << "Expected scheme in URL" << std::endl;
 		return std::nullopt;
 	}
@@ -169,6 +169,7 @@ URL URL::ABOUT_BLANK = *URL::create("about:blank");
 
 std::optional<URL> URL::resolve(std::string_view url_) {
 	if (url_.find("://") != std::string::npos) {
+		// url is abosolute
 		return URL::create(url_);
 	}
 	std::string url { url_ };
@@ -222,27 +223,38 @@ URL URL::cachable_subsection() const {
 	};
 }
 
-// todo: operator overload
-// todo: remove `//` for about and relative file URLs
-std::string URL::to_string() const {
-	const char *source = (view_source) ? "view-source:" : "";
-	std::string port_string = [&]() {
-		if (scheme == "https" && port == 443) {
-			return std::string{};
-		} else if (scheme == "http" && port == 80) {
-			return std::string{};
-		} else if (scheme == "file" || scheme == "data" || scheme == "about") {
-			return std::string{};
+std::ostream& operator<<(std::ostream& os, URL const& url) {
+	char const *source = (url.view_source) ? "view-source:" : "";
+	char const *scheme_delimeter = [&]() {
+		if (url.scheme == "https" || url.scheme == "http" || (url.scheme == "file" && !url.path.starts_with('.'))) {
+			return "://";
 		} else {
-			return ":" + std::to_string(port);
+			return ":";
 		}
 	}();
-	return source + scheme + "://" + host + port_string + path;
+	auto port = [&]() -> std::optional<uint16_t> {
+		if (url.scheme == "https" && url.port == 443) {
+			return std::nullopt;
+		} else if (url.scheme == "http" && url.port == 80) {
+			return std::nullopt;
+		} else if (url.scheme == "file" || url.scheme == "data" || url.scheme == "about") {
+			return std::nullopt;
+		} else {
+			return url.port;
+		}
+	}();
+
+	os << source << url.scheme << scheme_delimeter << url.host;
+	if (port) {
+		os << ":" << *port;
+	}
+	os << url.path;
+	return os;
 }
 
 std::size_t std::hash<URL>::operator()(const URL& u) const noexcept {
 	size_t seed = 0;
-	combine_hash(seed, std::hash<size_t>{}(u.view_source));
+	combine_hash(seed, std::hash<bool>{}(u.view_source));
 	combine_hash(seed, std::hash<std::string>{}(u.scheme));
 	combine_hash(seed, std::hash<std::string>{}(u.host));
 	combine_hash(seed, std::hash<uint16_t>{}(u.port));
@@ -259,7 +271,7 @@ struct HttpResponse {
 };
 
 class HttpConnection {
-	int m_socket_fd;
+	int m_socket_fd = -1;
 	SSL_CTX *m_ctx = nullptr;
 	SSL *m_ssl = nullptr;
 
@@ -269,26 +281,26 @@ public:
 		hints.ai_family = AF_INET;
 		hints.ai_socktype = SOCK_STREAM;
 		std::string port_s = std::to_string(port);
+		int connection_result{};
 
 		addrinfo *res;
 		int status = getaddrinfo(host, port_s.c_str(), &hints, &res);
 		if (status != 0) {
-			assert(false);
+			goto failure;
 		}
 
 		m_socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 		if (m_socket_fd == -1) {
 			perror("socket");
 			freeaddrinfo(res);
-			assert(false);
+			goto failure;
 		}
 
-		int connection_result = connect(m_socket_fd, res->ai_addr, res->ai_addrlen);
+		connection_result = connect(m_socket_fd, res->ai_addr, res->ai_addrlen);
 		freeaddrinfo(res);
 		if (connection_result == -1) {
 			perror("connect");
-			close(m_socket_fd);
-			assert(false);
+			goto failure_close;
 		}
 
 		if (encrypt) {
@@ -296,49 +308,45 @@ public:
 			m_ctx = SSL_CTX_new(method);
 			if (!m_ctx) {
 				ERR_print_errors_fp(stderr);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_close;
 			}
 
 			m_ssl = SSL_new(m_ctx);
 			if (!m_ssl) {
 				ERR_print_errors_fp(stderr);
-				SSL_CTX_free(m_ctx);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_ctx_free;
 			}
 			if (SSL_set_fd(m_ssl, m_socket_fd) == 0) {
 				ERR_print_errors_fp(stderr);
-				SSL_free(m_ssl);
-				SSL_CTX_free(m_ctx);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_ssl_free;
 			}
 
 			if (SSL_set_tlsext_host_name(m_ssl, host) == 0) {
 				ERR_print_errors_fp(stderr);
-				SSL_free(m_ssl);
-				SSL_CTX_free(m_ctx);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_ssl_free;
 			}
 
 			int connection_status = SSL_connect(m_ssl);
 			if (connection_status == 0) {
 				// gracefully failed
 				ERR_print_errors_fp(stderr);
-				SSL_free(m_ssl);
-				SSL_CTX_free(m_ctx);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_ssl_free;
 			} else if (connection_status < 0) {
 				ERR_print_errors_fp(stderr);
-				SSL_free(m_ssl);
-				SSL_CTX_free(m_ctx);
-				close(m_socket_fd);
-				assert(false);
+				goto failure_ssl_free;
 			}
 		}
+		return;
+
+	failure_ssl_free:
+		SSL_free(m_ssl);
+	failure_ctx_free:
+		SSL_CTX_free(m_ctx);
+	failure_close:
+		close(m_socket_fd);
+	failure:
+		// todo: optional!
+		assert(false);
 	}
 
 	~HttpConnection() {
@@ -716,7 +724,7 @@ std::string ConnectionManager::request(URL url) {
 
 void ConnectionManager::print_active_connections() const {
 	for (auto const& p : m_active_connections) {
-		std::cerr << p.first.to_string() << std::endl;
+		std::cerr << p.first << std::endl;
 	}
 }
 
@@ -737,7 +745,7 @@ std::string ConnectionManager::load_from_cache_or_fetch(URL url) {
 		if (now >= cached->second->expires_at) {
 			m_cached_responses.erase(cached);
 		} else {
-			std::cerr << "Using cached response for " << cachable_url.to_string() << std::endl;
+			std::cerr << "Using cached response for " << cachable_url << std::endl;
 			return cached->second->response.body;
 		}
 	}
@@ -761,7 +769,7 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 		std::string_view directive = trim_whitespace(d);
 
 		if (directive == "no-store") {
-			std::cerr << "No store for " << url.to_string() << std::endl;
+			std::cerr << "No store for " << url << std::endl;
 			return;
 		}
 
@@ -799,7 +807,7 @@ std::string ConnectionManager::request_http(URL url) {
 		// I wish if statements were expressions so bad
 		HttpConnection *connection = [&] {
 			if (pair == m_active_connections.end()) {
-				std::cerr << "Creating new connection for " << reusable_base.to_string() << " (" << url.to_string() << ")" << std::endl;
+				std::cerr << "Creating new connection for " << reusable_base << " (" << url << ")" << std::endl;
 				bool encrypted;
 				if (url.scheme == "http") {
 					encrypted = false;
@@ -813,7 +821,7 @@ std::string ConnectionManager::request_http(URL url) {
 				HttpConnection *conn = m_active_connections[reusable_base].get();
 				return conn;
 			} else {
-				std::cerr << "Reusing connection for " << reusable_base.to_string() << " (" << url.to_string() << ")" << std::endl;
+				std::cerr << "Reusing connection for " << reusable_base << " (" << url << ")" << std::endl;
 				return pair->second.get();
 			}
 		}();
@@ -826,7 +834,7 @@ std::string ConnectionManager::request_http(URL url) {
 			} else {
 				url = URL::create(location).value_or(URL::ABOUT_BLANK);
 			}
-			std::cerr << "Redirected to " << url.to_string() << std::endl;
+			std::cerr << "Redirected to " << url << std::endl;
 			continue;
 		}
 

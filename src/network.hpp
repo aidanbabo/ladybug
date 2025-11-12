@@ -20,12 +20,13 @@ struct URL {
 	std::optional<URL> resolve(std::string_view url);
 
 
-// todo: i want these to be module-private
 	bool operator==(const URL& other) const noexcept;
+// todo: i want these to be module-private
 	URL reusable_connection_subsection() const;
 	URL cachable_subsection() const;
-	std::string to_string() const;
 };
+
+std::ostream& operator<<(std::ostream& os, URL const& url);
 
 template <>
 struct std::hash<URL> {
@@ -37,6 +38,7 @@ struct HttpResponse;
 struct CachedHttpResponse;
 
 // Some URLs don't need a ConnectionManager at all! Should we allow them to get their contents without access to a ConnectionManager?
+// todo: Currently each tab gets their own manager for isolation, I don't think this is required tho and will speed things up.
 class ConnectionManager {
 	std::unordered_map<URL, std::unique_ptr<HttpConnection>> m_active_connections;
 	std::unordered_map<URL, std::unique_ptr<CachedHttpResponse>> m_cached_responses;

@@ -621,8 +621,10 @@ void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawComma
 			m_address_rect.fBottom,
 			SK_ColorBLACK, 1));
 	} else {
-		auto url = browser.m_tabs[browser.m_active_tab]->url().to_string();
-		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop + baseline, url, m_font, SK_ColorBLACK));
+		URL url = browser.m_tabs[browser.m_active_tab]->url();
+		std::ostringstream str;
+		str << url;
+		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop + baseline, str.str(), m_font, SK_ColorBLACK));
 	}
 }
 
