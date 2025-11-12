@@ -270,18 +270,31 @@ struct HttpResponse {
 	std::string body;
 };
 
+// todo: This class has a lot of asserts around reading and validating data.
+// Replacing these errors involves delving deeper into if they are:
+// - Recoverable: The method can problem solve and produce a result anyway
+// - Unrecoverable: The method must report failure to its caller
+// - Fatal: The method must communicate that this HttpConnection
+//   is no longer usable and should be destroyed (i.e. removed from the
+//   reusable connection cache).
+// This is currently a lot of work at this stage, and since we will also be handling
+// POST request soon instead of just GET, I'm going to defer this refactor. It will
+// undoubtedly complicated the code so I would rather add the necessary features and
+// then refactor.
 class HttpConnection {
-	int m_socket_fd = -1;
-	SSL_CTX *m_ctx = nullptr;
-	SSL *m_ssl = nullptr;
+	int m_socket_fd;
+	SSL_CTX *m_ctx;
+	SSL *m_ssl;
 
 public:
-	HttpConnection(char const *host, uint16_t port, bool encrypt) {
+	static std::optional<std::unique_ptr<HttpConnection>> create(char const *host, uint16_t port, bool encrypt) {
 		addrinfo hints{};
 		hints.ai_family = AF_INET;
 		hints.ai_socktype = SOCK_STREAM;
 		std::string port_s = std::to_string(port);
-		int connection_result{};
+		int connection_result{}, socket_fd{};
+		SSL_CTX *ctx = nullptr;
+		SSL *ssl = nullptr;
 
 		addrinfo *res;
 		int status = getaddrinfo(host, port_s.c_str(), &hints, &res);
@@ -289,14 +302,14 @@ public:
 			goto failure;
 		}
 
-		m_socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-		if (m_socket_fd == -1) {
+		socket_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		if (socket_fd == -1) {
 			perror("socket");
 			freeaddrinfo(res);
 			goto failure;
 		}
 
-		connection_result = connect(m_socket_fd, res->ai_addr, res->ai_addrlen);
+		connection_result = connect(socket_fd, res->ai_addr, res->ai_addrlen);
 		freeaddrinfo(res);
 		if (connection_result == -1) {
 			perror("connect");
@@ -305,28 +318,28 @@ public:
 
 		if (encrypt) {
 			const SSL_METHOD *method = TLS_client_method();
-			m_ctx = SSL_CTX_new(method);
-			if (!m_ctx) {
+			ctx = SSL_CTX_new(method);
+			if (!ctx) {
 				ERR_print_errors_fp(stderr);
 				goto failure_close;
 			}
 
-			m_ssl = SSL_new(m_ctx);
-			if (!m_ssl) {
+			ssl = SSL_new(ctx);
+			if (!ssl) {
 				ERR_print_errors_fp(stderr);
 				goto failure_ctx_free;
 			}
-			if (SSL_set_fd(m_ssl, m_socket_fd) == 0) {
+			if (SSL_set_fd(ssl, socket_fd) == 0) {
 				ERR_print_errors_fp(stderr);
 				goto failure_ssl_free;
 			}
 
-			if (SSL_set_tlsext_host_name(m_ssl, host) == 0) {
+			if (SSL_set_tlsext_host_name(ssl, host) == 0) {
 				ERR_print_errors_fp(stderr);
 				goto failure_ssl_free;
 			}
 
-			int connection_status = SSL_connect(m_ssl);
+			int connection_status = SSL_connect(ssl);
 			if (connection_status == 0) {
 				// gracefully failed
 				ERR_print_errors_fp(stderr);
@@ -336,24 +349,31 @@ public:
 				goto failure_ssl_free;
 			}
 		}
-		return;
+		return std::make_unique<HttpConnection>(socket_fd, ctx, ssl);
 
 	failure_ssl_free:
-		SSL_free(m_ssl);
+		SSL_free(ssl);
 	failure_ctx_free:
-		SSL_CTX_free(m_ctx);
+		SSL_CTX_free(ctx);
 	failure_close:
-		close(m_socket_fd);
+		close(socket_fd);
 	failure:
 		// todo: optional!
-		assert(false);
+		return std::nullopt;
 	}
+
+	HttpConnection(int socket_fd, SSL_CTX *ctx, SSL *ssl)
+		: m_socket_fd(socket_fd)
+		, m_ctx(ctx)
+		, m_ssl(ssl)
+	{}
 
 	~HttpConnection() {
 		if (is_encrypted()) {
 			auto ret = SSL_shutdown(m_ssl);
 			if (ret < 0) {
-				//SSL_get_error(m_ssl, ret);
+				// todo: 
+				// SSL_get_error(m_ssl, ret);
 				assert(false);
 			} else if (ret == 0) {
 				// no error, shutdown in progress
@@ -368,7 +388,7 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	HttpResponse request(URL url) {
+	std::optional<HttpResponse> request(URL url) {
 		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
 
 		std::vector<std::pair<std::string_view, std::string_view>> request_headers;
@@ -383,7 +403,10 @@ public:
 			request.append("\r\n");
 		}
 		request.append("\r\n");
-		write(request);
+		if (!write(request)) {
+			std::cerr << "Writing request failed" << std::endl;
+			return std::nullopt;
+		}
 
 		int const buffer_size = 4096;
 		char input_buffer[buffer_size];
@@ -453,7 +476,7 @@ public:
 						response.headers.insert({header_name, std::string{header_value}});
 					}
 				} else {
-					assert(false);
+					assert(false && "unreachable");
 				}
 			}
 		} while (parsing_state != PARSING_BODY);
@@ -494,6 +517,7 @@ public:
 				} else if (value == "chunked") {
 					chunked_transfer = true;
 				} else {
+					// todo: error
 					assert(false);
 				}
 			}
@@ -639,9 +663,9 @@ private:
 		}
 	}
 
-	void write(std::string data) {
+	bool write(std::string data) {
 		if (is_encrypted()) {
-			// there may be handleable failures here for larger request sizes?
+			// todo: there may be handleable failures here for larger request sizes?
 			int send_result = SSL_write(m_ssl, data.data(), data.size());
 			if (send_result <= 0) {
 				ERR_print_errors_fp(stderr);
@@ -649,15 +673,16 @@ private:
 				SSL_free(m_ssl);
 				SSL_CTX_free(m_ctx);
 				close(m_socket_fd);
-				assert(false);
+				return false;
 			}
 		} else {
 			int send_result = send(m_socket_fd, data.data(), data.size(), 0);
 			if (send_result == -1) {
 				perror("send");
-				assert(false);
+				return false;
 			}
 		}
+		return true;
 	}
 
 	int read(char *buffer, int length) const {
@@ -813,7 +838,7 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url) {
 		auto pair = m_active_connections.find(reusable_base);
 
 		// I wish if statements were expressions so bad
-		HttpConnection *connection = [&] {
+		auto connection = [&]() -> HttpConnection* {
 			if (pair == m_active_connections.end()) {
 				std::cerr << "Creating new connection for " << reusable_base << " (" << url << ")" << std::endl;
 				bool encrypted;
@@ -824,35 +849,51 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url) {
 				} else {
 					assert(false);
 				}
-				auto connection = std::make_unique<HttpConnection>(url.host.c_str(), url.port, encrypted);
-				m_active_connections.insert({reusable_base, std::move(connection)});
-				HttpConnection *conn = m_active_connections[reusable_base].get();
-				return conn;
+				auto connection { HttpConnection::create(url.host.c_str(), url.port, encrypted) };
+				if (connection) {
+					m_active_connections.insert({reusable_base, std::move(*connection)});
+					HttpConnection *conn = m_active_connections[reusable_base].get();
+					return conn;
+				} else {
+					std::cerr << "Connection to " << url << " failed" << std::endl;
+					return nullptr;
+				}
 			} else {
 				std::cerr << "Reusing connection for " << reusable_base << " (" << url << ")" << std::endl;
 				return pair->second.get();
 			}
 		}();
-
-		HttpResponse response = connection->request(url);
-		std::cerr << response.status << " to " << url << std::endl;
-
-		store_in_cache_if_cachable(url, response);
-
-		if (response.status >= 300 && response.status < 400) {
-			// todo: Handle missing header.
-			std::string location = response.headers["location"];
-			if (location.rfind("/", 0) == 0) { // starts_with
-				url.path = location;
-			} else {
-				url = URL::create(location).value_or(URL::ABOUT_BLANK);
-			}
-			std::cerr << "Redirected to " << url << std::endl;
-			continue;
+		if (!connection) {
+			return std::nullopt;
 		}
 
-		return response.body;
+		auto response = connection->request(url);
+		if (!response) {
+			return std::nullopt;
+		}
+		std::cerr << response->status << " to " << url << std::endl;
+
+		store_in_cache_if_cachable(url, *response);
+
+		if (response->status >= 300 && response->status < 400) {
+			if (auto location_iter = response->headers.find("location"); location_iter != response->headers.end()) {
+				auto location = location_iter->second;
+				if (location.starts_with('/')) {
+					url.path = location;
+				} else {
+					url = URL::create(location).value_or(URL::ABOUT_BLANK);
+				}
+				std::cerr << "Redirected to " << url << std::endl;
+				continue;
+			} else {
+				std::cerr << "No `Location` header in redirect response " << url << std::endl;
+				return std::nullopt;
+			}
+		}
+
+		return response->body;
 	}
 
-	assert(false && "Too many redirects");
+	std::cout << "Too many redirects" << std::endl;
+	return std::nullopt;
 }

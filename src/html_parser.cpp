@@ -238,16 +238,37 @@ std::shared_ptr<Node> HTMLParser::parse() {
 
 	bool in_tag = false;
 	bool in_script = false;
+	bool in_style = false;
 	bool in_comment = false;
 	bool in_quoted_attribute = false;
 	while (i < m_body.length()) {
+		// todo: revamp script and style parsing
 		if (in_script) {
+			// Adding text will happen in a later chapter.
 			std::string_view script_end = "</script>";
 			size_t script_end_start = m_body.find(script_end, i);
-			add_tag(std::string{ "/script" });
-			// Out of bounds is ok.
-			i = script_end_start + script_end.size();
-			in_script = false;
+			if (script_end_start == std::string::npos) {
+				i = m_body.size();
+			} else {
+				add_tag(std::string{ "/script" });
+				// Out of bounds is ok.
+				i = script_end_start + script_end.size();
+				in_script = false;
+			}
+			continue;
+		}
+		if (in_style) {
+			std::string_view style = "</style>";
+			size_t style_end_start = m_body.find(style, i);
+			if (style_end_start == std::string::npos) {
+				add_text(std::string{m_body.substr(i)});
+				i = m_body.size();
+			} else {
+				add_text(std::string{m_body.substr(i, style_end_start - i)});
+				add_tag(std::string{ "/style" });
+				i = style_end_start + style.size();
+				in_style = false;
+			}
 			continue;
 		}
 		if (in_comment) {
@@ -284,7 +305,9 @@ std::shared_ptr<Node> HTMLParser::parse() {
 					if (tag.value()->tag == "script" && tag.value()->attributes.find("src") == tag.value()->attributes.end()) {
 						in_script = true;
 					}
-					// todo: add similar parsing fallthrough for style tags
+					if (tag.value()->tag == "style") {
+						in_style = true;
+					}
 				}
 			}
 			buffer = "";

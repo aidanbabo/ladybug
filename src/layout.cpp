@@ -263,6 +263,8 @@ LayoutMode BlockLayout::layout_mode() const {
 	return LayoutMode::Block;
 }
 
+// todo: BlockLayout::layout can have multiple nodes
+// stop using m_nodes[0]
 void BlockLayout::layout(FontCache& font_cache) {
 	m_x = m_parent.lock()->m_x;
 	{
@@ -292,40 +294,41 @@ void BlockLayout::layout(FontCache& font_cache) {
 
 	LayoutMode mode = layout_mode();
 	if (mode == LayoutMode::Block) {
-		assert(m_nodes.size() == 1 && "block layout can't have multiple children");
 		std::shared_ptr<LayoutBase> shared = shared_from_this();
 		std::weak_ptr<BlockLayout> previous;
 		std::vector<std::shared_ptr<Node>> nodes;
-		for (auto const& child : m_nodes[0]->children) {
-			if (child->type == NodeType::Element && static_cast<Element const&>(*child).tag == "head") {
-				continue;
-			}
+		for (auto const& node : m_nodes) {
+			for (auto const& child : node->children) {
+				if (child->type == NodeType::Element && static_cast<Element const&>(*child).tag == "head") {
+					continue;
+				}
 
-			switch (child->type) {
-			case NodeType::Text: {
-				nodes.push_back(child);
-				break;
-			}
-			case NodeType::Element: {
-				auto element = static_cast<Element const&>(*child);
-				if (std::find(TEXT_LIKE_ELEMENTS.begin(), TEXT_LIKE_ELEMENTS.end(), element.tag) == TEXT_LIKE_ELEMENTS.end()) {
-					if (!nodes.empty()) {
-						auto next = std::make_shared<BlockLayout>(nodes, shared, previous);
+				switch (child->type) {
+				case NodeType::Text: {
+					nodes.push_back(child);
+					break;
+				}
+				case NodeType::Element: {
+					auto element = static_cast<Element const&>(*child);
+					if (std::find(TEXT_LIKE_ELEMENTS.begin(), TEXT_LIKE_ELEMENTS.end(), element.tag) == TEXT_LIKE_ELEMENTS.end()) {
+						if (!nodes.empty()) {
+							auto next = std::make_shared<BlockLayout>(nodes, shared, previous);
+							m_children.push_back(next);
+							previous = next;
+							nodes.clear();
+						}
+						auto next = std::make_shared<BlockLayout>(std::vector{ child }, shared, previous);
 						m_children.push_back(next);
 						previous = next;
-						nodes.clear();
+					} else {
+						nodes.push_back(child);
 					}
-					auto next = std::make_shared<BlockLayout>(std::vector{ child }, shared, previous);
-					m_children.push_back(next);
-					previous = next;
-				} else {
-					nodes.push_back(child);
+					break;
 				}
-				break;
-			}
-			default: {
-				assert(false && "unreachable");
-			}
+				default: {
+					assert(false && "unreachable");
+				}
+				}
 			}
 		}
 		if (!nodes.empty()) {
