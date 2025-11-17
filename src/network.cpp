@@ -46,6 +46,7 @@ static std::optional<URL> parse_data_url(bool view_source, std::string scheme, s
 		.host = "",
 		.port = 0,
 		.path = path,
+		.fragment = "",
 	};
 }
 
@@ -60,6 +61,7 @@ static std::optional<URL> parse_about_url(bool view_source, std::string scheme, 
 		.host = "blank",
 		.port = 0,
 		.path = "",
+		.fragment = "",
 	};
 }
 
@@ -67,21 +69,27 @@ static std::optional<URL> parse_relative_file_url(bool view_source, std::string 
 	return URL {
 		.view_source = view_source,
 		.scheme = scheme,
-		.host = "blank",
+		.host = "",
 		.port = 0,
 		.path = std::string(string),
+		.fragment = "",
 	};
 }
 
 static std::optional<URL> parse_standard_url(bool view_source, std::string scheme, std::string_view string) {
-	std::string host, path;
-	size_t n = string.find("/");
+	std::string host, path, fragment;
+	size_t n = string.find('/');
 	if (n == std::string::npos) {
 		host = string;
 		path = "/";
 	} else {
 		host = string.substr(0, n);
 		path = string.substr(n);
+	}
+	n = path.find('#');
+	if (n != std::string::npos) {
+		fragment = path.substr(n + 1);
+		path = path.substr(0, n);
 	}
 
 	n = host.find(":");
@@ -110,6 +118,7 @@ static std::optional<URL> parse_standard_url(bool view_source, std::string schem
 		.host = host,
 		.port = port,
 		.path = path,
+		.fragment = fragment,
 	};
 }
 
@@ -167,13 +176,17 @@ std::optional<URL> URL::create(std::string_view string) {
 
 URL URL::ABOUT_BLANK = *URL::create("about:blank");
 
-std::optional<URL> URL::resolve(std::string_view url_) {
+std::optional<URL> URL::resolve(std::string_view url_) const {
 	if (url_.find("://") != std::string::npos) {
 		// url is abosolute
 		return URL::create(url_);
 	}
 	std::string url { url_ };
-	if (!url.starts_with('/')) {
+	if (url.starts_with('#')) {
+		URL out = *this;
+		out.fragment = url.substr(1);
+		return out;
+	} else if (!url.starts_with('/')) {
 		size_t dir_end = path.rfind("/");
 		std::string_view dir { path.substr(0, dir_end) };
 
@@ -197,8 +210,12 @@ std::optional<URL> URL::resolve(std::string_view url_) {
 	}
 }
 
-bool URL::operator==(const URL& other) const noexcept {
+bool URL::equal_disregarding_fragment(URL const& other) const {
 	return view_source == other.view_source && scheme == other.scheme && host == other.host && port == other.port && path == other.path;
+}
+
+bool URL::operator==(const URL& other) const noexcept {
+	return equal_disregarding_fragment(other) && fragment == other.fragment;
 }
 
 // todo: special hash and eq impls for this?
@@ -209,6 +226,7 @@ URL URL::reusable_connection_subsection() const {
 		.host = host,
 		.port = port,
 		.path = "",
+		.fragment = "",
 	};
 }
 
@@ -220,6 +238,7 @@ URL URL::cachable_subsection() const {
 		.host = host,
 		.port = port,
 		.path = path,
+		.fragment = "",
 	};
 }
 
@@ -249,6 +268,9 @@ std::ostream& operator<<(std::ostream& os, URL const& url) {
 		os << ":" << *port;
 	}
 	os << url.path;
+	if (!url.fragment.empty()) {
+		os << "#" << url.fragment;
+	}
 	return os;
 }
 
@@ -259,6 +281,7 @@ std::size_t std::hash<URL>::operator()(const URL& u) const noexcept {
 	combine_hash(seed, std::hash<std::string>{}(u.host));
 	combine_hash(seed, std::hash<uint16_t>{}(u.port));
 	combine_hash(seed, std::hash<std::string>{}(u.path));
+	combine_hash(seed, std::hash<std::string>{}(u.fragment));
 	return seed;
 }
 

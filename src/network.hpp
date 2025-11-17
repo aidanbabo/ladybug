@@ -13,11 +13,13 @@ struct URL {
 	std::string host;
 	uint16_t port;
 	std::string path;
+	std::string fragment;
 
 	static URL ABOUT_BLANK;
 
 	static std::optional<URL> create(std::string_view string);
-	std::optional<URL> resolve(std::string_view url);
+	std::optional<URL> resolve(std::string_view url) const;
+	bool equal_disregarding_fragment(URL const& other) const;
 
 
 	bool operator==(const URL& other) const noexcept;

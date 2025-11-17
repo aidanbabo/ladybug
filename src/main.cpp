@@ -114,10 +114,117 @@ class Tab {
 
 public:
 	void load(URL url, FontCache& font_cache, bool alter_history) {
-		std::optional<std::string> body = m_connection_manager.request(url);
-		if (!body) {
-			std::cerr << "Failed to load new document" << std::endl;
-			return;
+		if (m_url.equal_disregarding_fragment(url)) {
+			if (url.fragment == "") {
+				m_scroll = 0;
+			} else {
+				std::vector<std::shared_ptr<LayoutBase>> layouts;
+				layout_tree_to_list(m_document, layouts);
+				auto layout = std::find_if(layouts.begin(), layouts.end(), [&](auto lay) {
+					for (auto const& n : lay->nodes()) {
+						if (n->type != NodeType::Element) {
+							continue;
+						}
+						auto e = static_cast<Element const&>(*n);
+						if (auto id = e.attributes.find("id"); id != e.attributes.end()) {
+							if (id->second == url.fragment) {
+								return true;
+							}
+						}
+					}
+					return false;
+				});
+
+				if (layout == layouts.end()) {
+					std::cerr << "Failed to locate fragment" << std::endl;
+					return;
+				} else {
+					m_scroll = (*layout)->m_y;
+					clamp_scroll();
+				}
+			}
+		} else {
+			std::optional<std::string> body = m_connection_manager.request(url);
+			if (!body) {
+				std::cerr << "Failed to load new document" << std::endl;
+				return;
+			}
+
+			m_scroll = 0;
+			m_nodes = HTMLParser(*body).parse();
+			assert(m_nodes->type == NodeType::Element);
+			StyleSheet rules = m_default_style_sheet;
+			std::vector<std::shared_ptr<Node>> nodes;
+			html_tree_to_list(m_nodes, nodes);
+			// true means we must fetch, false means inline
+			std::vector<std::pair<std::string, bool>> styles;
+			for (auto const& node : nodes) {
+				if (node->type != NodeType::Element) {
+					continue;
+				}
+				auto element = static_cast<Element const&>(*node);
+				if (element.tag == "style" && !element.children.empty()) {
+					Node const& child = *element.children[0];
+					if (child.type == NodeType::Text) {
+						auto text = static_cast<Text const&>(child);
+						styles.push_back(std::make_pair(text.text, false));
+					}
+				} else {
+					if (element.tag != "link") {
+						continue;
+					}
+					auto rel = element.attributes.find("rel");
+					if (rel == element.attributes.end() || rel->second != "stylesheet") {
+						continue;
+					}
+					if (!element.attributes.contains("href")) {
+						continue;
+					}
+					styles.push_back(std::make_pair(element.attributes["href"], true));
+				}
+			}
+
+			for (auto const& [access, must_fetch] : styles) {
+				auto body = [&]() -> std::optional<std::string> {
+					if (must_fetch) {
+						auto style_url = url.resolve(access);
+						if (!style_url) {
+							std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
+							return std::nullopt;
+						}
+
+						auto body = m_connection_manager.request(*style_url);
+						return body;
+					} else {
+						return access;
+					}
+				}();
+				if (!body) {
+					continue;
+				}
+				auto sh = CSSParser(*body).parse();
+				if (!sh) {
+					if (must_fetch) {
+						std::cerr << "Improper stylesheet at: '" << access << "'" << std::endl;
+					} else {
+						std::cerr << "Improper inline stylesheet" << std::endl;
+					}
+					continue;
+				}
+				rules.rules.insert(rules.rules.end(), sh->rules.begin(), sh->rules.end());
+			}
+
+			// stable sort so file order breaks the rule (first file first!)
+			std::ranges::stable_sort(rules.rules, {}, [](auto p) {
+				return p.first->priority;
+			});
+			m_nodes->style(rules);
+			//print_node(*m_nodes);
+			m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
+			m_document->layout(font_cache);
+			//m_document->print_layout();
+			m_display_list.clear();
+			paint_tree(*m_document, m_display_list);
 		}
 
 		m_url = url;
@@ -127,82 +234,6 @@ public:
 			m_history.push_back(url);
 			m_history_index++;
 		}
-
-		m_scroll = 0;
-		m_nodes = HTMLParser(*body).parse();
-		assert(m_nodes->type == NodeType::Element);
-		StyleSheet rules = m_default_style_sheet;
-		std::vector<std::shared_ptr<Node>> nodes;
-		html_tree_to_list(m_nodes, nodes);
-		// true means we must fetch, false means inline
-		std::vector<std::pair<std::string, bool>> styles;
-		for (auto const& node : nodes) {
-			if (node->type != NodeType::Element) {
-				continue;
-			}
-			auto element = static_cast<Element const&>(*node);
-			if (element.tag == "style" && !element.children.empty()) {
-				Node const& child = *element.children[0];
-				if (child.type == NodeType::Text) {
-					auto text = static_cast<Text const&>(child);
-					styles.push_back(std::make_pair(text.text, false));
-				}
-			} else {
-				if (element.tag != "link") {
-					continue;
-				}
-				auto rel = element.attributes.find("rel");
-				if (rel == element.attributes.end() || rel->second != "stylesheet") {
-					continue;
-				}
-				if (!element.attributes.contains("href")) {
-					continue;
-				}
-				styles.push_back(std::make_pair(element.attributes["href"], true));
-			}
-		}
-
-		for (auto const& [access, must_fetch] : styles) {
-			auto body = [&]() -> std::optional<std::string> {
-				if (must_fetch) {
-					auto style_url = url.resolve(access);
-					if (!style_url) {
-						std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
-						return std::nullopt;
-					}
-
-					auto body = m_connection_manager.request(*style_url);
-					return body;
-				} else {
-					return access;
-				}
-			}();
-			if (!body) {
-				continue;
-			}
-			auto sh = CSSParser(*body).parse();
-			if (!sh) {
-				if (must_fetch) {
-					std::cerr << "Improper stylesheet at: '" << access << "'" << std::endl;
-				} else {
-					std::cerr << "Improper inline stylesheet" << std::endl;
-				}
-				continue;
-			}
-			rules.rules.insert(rules.rules.end(), sh->rules.begin(), sh->rules.end());
-		}
-
-		// stable sort so file order breaks the rule (first file first!)
-		std::ranges::stable_sort(rules.rules, {}, [](auto p) {
-			return p.first->priority;
-		});
-		m_nodes->style(rules);
-		//print_node(*m_nodes);
-		m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-		m_document->layout(font_cache);
-		//m_document->print_layout();
-		m_display_list.clear();
-		paint_tree(*m_document, m_display_list);
 	}
 	
 	void draw(SkCanvas *canvas, float offset) {

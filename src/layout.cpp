@@ -177,6 +177,10 @@ void TextLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) cons
 	commands.push_back(cmd);
 }
 
+std::vector<std::shared_ptr<Node>> TextLayout::nodes() const {
+	return std::vector{m_node};
+}
+
 LineLayout::LineLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
 	: LayoutBase(parent)
 	, m_node(node)
@@ -227,6 +231,10 @@ void LineLayout::layout(FontCache& font_cache) {
 
 void LineLayout::paint(std::vector<std::shared_ptr<DrawCommand>>&) const
 {}
+
+std::vector<std::shared_ptr<Node>> LineLayout::nodes() const {
+	return std::vector{m_node};
+}
 
 BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous)
 	: LayoutBase(parent)
@@ -529,6 +537,10 @@ void BlockLayout::new_line(std::shared_ptr<Node> node) {
 	}
 	*/
 
+std::vector<std::shared_ptr<Node>> BlockLayout::nodes() const {
+	return m_nodes;
+}
+
 DocumentLayout::DocumentLayout(std::shared_ptr<Node> node, float screen_width)
 	: LayoutBase(std::weak_ptr<LayoutBase>())
 	, m_node(node)
@@ -547,6 +559,10 @@ void DocumentLayout::layout(FontCache& font_cache) {
 }
 
 void DocumentLayout::paint(std::vector<std::shared_ptr<DrawCommand>>&) const {}
+
+std::vector<std::shared_ptr<Node>> DocumentLayout::nodes() const {
+	return std::vector{m_node};
+}
 
 void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& commands) {
 	layout.paint(commands);

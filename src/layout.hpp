@@ -29,6 +29,7 @@ struct LayoutBase : public std::enable_shared_from_this<LayoutBase> {
 	explicit LayoutBase(std::weak_ptr<LayoutBase> parent);
 	virtual void layout(FontCache& font_cache) = 0;
 	virtual void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const = 0;
+	virtual std::vector<std::shared_ptr<Node>> nodes() const = 0;
 	void print_layout(int indent = 0) const;
 	virtual ~LayoutBase() = default;
 private:
@@ -45,6 +46,7 @@ struct TextLayout : public LayoutBase {
 	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
+	std::vector<std::shared_ptr<Node>> nodes() const override;
 	~TextLayout() = default;
 };
 
@@ -57,6 +59,7 @@ public:
 	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
+	std::vector<std::shared_ptr<Node>> nodes() const override;
 	~LineLayout() = default;
 };
 
@@ -72,6 +75,7 @@ public:
 	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
+	std::vector<std::shared_ptr<Node>> nodes() const override;
 	~BlockLayout() = default;
 
 private:
@@ -89,6 +93,7 @@ public:
 	void layout(FontCache& font_cache) override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
+	std::vector<std::shared_ptr<Node>> nodes() const override;
 	~DocumentLayout() = default;
 };
 
