@@ -29,11 +29,13 @@ std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, f
 	return std::make_shared<DrawText>(SkRect::MakeLTRB(left, top, left + width, top + height), text, font, color);
 }
 
-// todo: draw from top left and not baseline
 void DrawText::execute(float scroll, SkCanvas& canvas) {
+	SkFontMetrics m;
+	font->getMetrics(&m);
 	SkPaint paint;
 	paint.setColor(color);
-	canvas.drawString(text.c_str(), rect.fLeft, rect.fTop - scroll, *font, paint);
+	// Skia draws text from the baseline, not from the NW like Tkinter
+	canvas.drawString(text.c_str(), rect.fLeft, rect.fTop - scroll - m.fAscent, *font, paint);
 }
 
 DrawRect::DrawRect(SkRect rect, SkColor color)

@@ -192,8 +192,10 @@ void LineLayout::layout(FontCache& font_cache) {
 		m_y = m_parent.lock()->m_y;
 	}
 	if (m_children.empty()) {
-		// todo: give it the height of the text that surrounds it? it's sort of unclear how to do that.
 		m_height = 0;
+		if (auto prev = m_previous.lock()) {
+			m_height = prev->m_height;
+		}
 		return;
 	}
 
@@ -214,14 +216,9 @@ void LineLayout::layout(FontCache& font_cache) {
 	// ascent in skia is typically a negative number, but for Tk it's positive...
 	float max_ascent = -std::ranges::min(ascents);
 	float baseline = m_y + max_ascent * 1.25;
-	// Skia draws text from the baseline, not from the NW like Tkinter
-	for (auto& word : m_children) {
-		// todo: reintroduce super text
-		//if (word->is_super_text) {
-			//word->m_y = baseline - max_ascent / 2;
-		//} else {
-			word->m_y = baseline;
-		//}
+	for (size_t i = 0; i < m_children.size(); i++) {
+		// todo: Supertext. We could put a flag on each text-layout?
+		m_children[i]->m_y = baseline + metrics[i].fAscent;
 	}
 	auto descents = std::views::transform(metrics, &SkFontMetrics::fDescent);
 	float max_descent = std::ranges::max(descents);

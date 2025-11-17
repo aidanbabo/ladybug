@@ -619,21 +619,17 @@ void Chrome::click(Browser& browser, float x, float y) {
 }
 
 void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawCommand>>& commands) {
-	SkFontMetrics m;
-	m_font->getMetrics(&m);
-	float baseline = -m.fAscent;
-
 	commands.push_back(DrawRect::create(SkRect::MakeLTRB(0, 0, browser.m_width, m_bottom), SK_ColorWHITE));
 	
 	commands.push_back(DrawOutline::create(m_newtab_rect, SK_ColorBLACK, 1));
-	commands.push_back(DrawText::create(m_newtab_rect.fLeft + m_padding, m_newtab_rect.fTop + baseline, m_plus_width, "+", m_font, SK_ColorBLACK));
+	commands.push_back(DrawText::create(m_newtab_rect.fLeft + m_padding, m_newtab_rect.fTop, m_plus_width, "+", m_font, SK_ColorBLACK));
 
 	for (size_t i = 0; i < browser.m_tabs.size(); i++) {
 		auto bounds = tab_rect(i);
 		commands.push_back(DrawLine::create(bounds.fLeft, 0, bounds.fLeft, bounds.fBottom, SK_ColorBLACK, 1));
 		commands.push_back(DrawLine::create(bounds.fRight, 0, bounds.fRight, bounds.fBottom, SK_ColorBLACK, 1));
 		std::string text = "Tab " + std::to_string(i);
-		commands.push_back(DrawText::create(bounds.fLeft + m_padding, bounds.fTop + m_padding + baseline, text, m_font, SK_ColorBLACK));
+		commands.push_back(DrawText::create(bounds.fLeft + m_padding, bounds.fTop + m_padding, text, m_font, SK_ColorBLACK));
 
 		if (i == browser.m_active_tab) {
 			commands.push_back(DrawLine::create(0, bounds.fBottom, bounds.fLeft, bounds.fBottom, SK_ColorBLACK, 1));
@@ -642,14 +638,13 @@ void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawComma
 	}
 
 	commands.push_back(DrawOutline::create(m_back_rect, SK_ColorBLACK, 1));
-	commands.push_back(DrawText::create(m_back_rect.fLeft + m_padding, m_back_rect.fTop + baseline, m_back_width, "<", m_font, SK_ColorBLACK));
+	commands.push_back(DrawText::create(m_back_rect.fLeft + m_padding, m_back_rect.fTop, m_back_width, "<", m_font, SK_ColorBLACK));
 
 	commands.push_back(DrawOutline::create(m_address_rect, SK_ColorBLACK, 1));
 
 	if (m_focus == Focus::AddressBar) {
 		float address_bar_size = m_font->measureText(m_address_bar.data(), m_address_bar.size(), SkTextEncoding::kUTF8);
-		// todo: add baseline to constructor
-		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop + baseline, address_bar_size, m_address_bar, m_font, SK_ColorBLACK));
+		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop, address_bar_size, m_address_bar, m_font, SK_ColorBLACK));
 		commands.push_back(DrawLine::create(
 			m_address_rect.fLeft + m_padding + address_bar_size,
 			m_address_rect.fTop,
@@ -660,7 +655,7 @@ void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawComma
 		URL url = browser.m_tabs[browser.m_active_tab]->url();
 		std::ostringstream str;
 		str << url;
-		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop + baseline, str.str(), m_font, SK_ColorBLACK));
+		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop, str.str(), m_font, SK_ColorBLACK));
 	}
 }
 
