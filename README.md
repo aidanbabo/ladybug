@@ -35,4 +35,4 @@ Some of the exercises have been done, only the ones I find technically interesti
     - Supports basic text styling with `<b>`, `<i>`, `<sup>` and others via the user agent style sheet.
 - Scrolling and resizing the window
     - Scrolling via the mousewheel is a little chunky. My mouse wheel doesn't work so testing is difficult. Use the arrow keys.
-- Navigation through the URL bar, back button and hyperlinks (`<a>` only).
+- Navigation through the URL bar, back/forward button and hyperlinks (`<a>` only).

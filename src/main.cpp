@@ -7,6 +7,13 @@
 // todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
 // todo: Exercise 6-9: !important -> Not interested
 // todo: Exercise 6-10: :has selectors -> Also not interested AND it would be slow AND maybe I could find a fast impl but i'm NOT interested
+// todo: Exercise 7-6: Search -> I don't want to add more URL parsing unless I must, because it's too close to a refactor
+// todo: Exercise 7-7: Visited links -> Not intersted in doing it in C++ or CSS
+// todo: Exercise 7-8: Bookmarks -> I don't want to design a web page in Skia or HTML with hooks
+// todo: Exercise 7-9: Cursor -> Cumbersome. Maybe I'll want it later
+// todo: Exercise 7-10: Mulitple Windows -> This seems a litle cool, but I'm not interested enough in dealing with SDL3 more
+// todo: Exercise 7-11: Clicks via the display list -> I am too worried about the display list changes coming up to do this
+// Many exercises are being skipped because it makes the refactors in later chapters much harder. Chapter 7 was a pain to get done.
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 //
