@@ -16,6 +16,7 @@
 #include <array>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <unordered_map>
 
 #include "network.hpp"
@@ -25,6 +26,23 @@ void network_init() {
 	SSL_library_init();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
+}
+
+std::string url_encode(std::string_view s) {
+	std::string out;
+	for (char c : s) {
+		if (!std::isalnum(c) && c != '-' && c != '_' && c !='.' && c != '~') {
+			out.push_back('%');
+			std::stringstream ss;
+			ss << std::hex << (int) c;
+			std::string t = ss.str();
+			std::transform(t.begin(), t.end(), t.begin(), ::toupper);
+			out.append(t);
+		} else {
+			out.push_back(c);
+		}
+	}
+	return out;
 }
 
 static std::optional<URL> parse_data_url(bool view_source, std::string scheme, std::string_view string) {
@@ -411,14 +429,18 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	std::optional<HttpResponse> request(URL url) {
-		std::string request = "GET " + url.path + " HTTP/1.1\r\n";
+	std::optional<HttpResponse> request(URL url, std::optional<std::string> payload) {
+		std::string method { payload ? "POST" : "GET" };
+		std::string request = method + " " + url.path + " HTTP/1.1\r\n";
 
 		std::vector<std::pair<std::string_view, std::string_view>> request_headers;
 		request_headers.push_back(std::make_pair("Host", std::string_view{url.host}));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip, deflate"));
+		if (payload) {
+			request_headers.push_back(std::make_pair("Content-Length", std::to_string(payload->size())));
+		}
 		for (auto const& pair : request_headers) {
 			request.append(pair.first);
 			request.append(": ");
@@ -426,6 +448,10 @@ public:
 			request.append("\r\n");
 		}
 		request.append("\r\n");
+		if (payload) {
+			request.append(*payload);
+		}
+
 		if (!write(request)) {
 			std::cerr << "Writing request failed" << std::endl;
 			return std::nullopt;
@@ -514,6 +540,7 @@ public:
 	void parse_body(char *input_buffer, int input_buffer_size, char *next_in, int avail_in, HttpResponse& response) {
 		int total_content_length = -1;
 		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
+			// todo: no more exceptions!
 			total_content_length = std::stol(content_length_entry->second);
 		}
 
@@ -744,14 +771,14 @@ struct CachedHttpResponse {
 ConnectionManager::ConnectionManager() = default;
 ConnectionManager::~ConnectionManager() = default;
 
-std::optional<std::string> ConnectionManager::request(URL url) {
+std::optional<std::string> ConnectionManager::request(URL url, std::optional<std::string> payload) {
 	std::optional<std::string> response;
 	if (url.scheme == "file") {
 		response = load_file(url);
 	} else if (url.scheme == "data") {
 		response = url.path;
 	} else if (url.scheme == "http" || url.scheme == "https") {
-		response = load_http_or_from_cache(url);
+		response = load_http_or_from_cache(url, payload);
 	} else if (url.scheme == "about") {
 		if (url.host == "blank") {
 			response = "";
@@ -850,7 +877,7 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 	m_cached_responses.insert({cachable_url, std::move(cachable_response)});
 }
 
-std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url) {
+std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url, std::optional<std::string> payload) {
 	// Redirect loop.
 	for (int i = 0; i < 10; i++) {
 		if (auto content = try_load_from_cache(url)) {
@@ -890,11 +917,16 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url) {
 			return std::nullopt;
 		}
 
-		auto response = connection->request(url);
+		auto response = connection->request(url, payload);
 		if (!response) {
 			return std::nullopt;
 		}
 		std::cerr << response->status << " to " << url << std::endl;
+		if (auto conn = response->headers.find("connection"); conn != response->headers.end() && conn->second == "keep-alive") {
+			// save to keep alive
+		} else {
+			m_active_connections.erase(reusable_base);
+		}
 
 		store_in_cache_if_cachable(url, *response);
 

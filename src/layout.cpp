@@ -13,6 +13,8 @@
 #include <numeric>
 #include <ranges>
 
+constexpr float INPUT_WIDTH_PX = 200;
+
 static std::optional<SkColor> parse_hex_color(std::string_view hex) {
 	bool is_short = hex.size() == 3 || hex.size() == 4;
 	bool is_long = hex.size() == 6 || hex.size() == 8;
@@ -57,6 +59,8 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 		{ "lightblue", SkColorSetRGB(0xad, 0xd8, 0xe6) },
 		{ "yellow", SK_ColorYELLOW },
 		{ "magenta", SK_ColorMAGENTA },
+		// todo: not orange lol
+		{ "orange", SkColorSetRGB(0xff, 0xff, 0x00) },
 	};
 
 	if (auto c = COLOR_NAMES.find(color); c != COLOR_NAMES.end()) {
@@ -106,6 +110,10 @@ void LayoutBase::print_layout(int indent) const {
 	}
 }
 
+void InputLayout::print() const {
+	std::cout << "Input: ";
+}
+
 void TextLayout::print() const {
 	std::cout << "Text: " << m_word;
 }
@@ -127,6 +135,98 @@ void BlockLayout::print() const {
 
 void DocumentLayout::print() const {
 	std::cout << "Document: ";
+}
+
+SkRect LayoutBase::self_rect() const {
+	return SkRect::MakeLTRB(m_x, m_y, m_x + m_width, m_y + m_height);
+}
+
+bool LayoutBase::should_paint() const {
+	return true;
+}
+
+InputLayout::InputLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
+	: LayoutBase(parent)
+	, m_node(std::move(node))
+	, m_previous(previous)
+{}
+
+void InputLayout::layout(FontCache& font_cache) {
+	bool is_bold = false;
+	if (m_node->styles.find("font-weight")->second == "bold") {
+		is_bold = true;
+	}
+
+	bool is_italic = false;
+	if (m_node->styles.find("font-style")->second == "italic") {
+		is_italic = true;
+	}
+
+	std::string_view font_family { m_node->styles.find("font-family")->second };
+	std::string_view size_str { m_node->styles.find("font-size")->second };
+	// todo: no alloc, no exception, add someting like this to utils?
+	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
+	size = static_cast<float>(size) * 0.75;
+
+	m_font = font_cache.get_font(font_family, size, is_bold, is_italic);
+
+	m_width = INPUT_WIDTH_PX;
+	if (auto prev = m_previous.lock()) {
+		auto text_prev = dynamic_cast<TextLayout *>(&*prev);
+		auto space = text_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+		m_x = prev->m_x + space + prev->m_width;
+	} else {
+		m_x = m_parent.lock()->m_x;
+	}
+
+	SkFontMetrics m;
+	m_font->getMetrics(&m);
+	m_height = m.fDescent - m.fAscent; // todo: should be linespace
+
+}
+
+void InputLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
+	auto bgcolor_iter = m_node->styles.find("background-color");
+	std::string_view bgcolor { (bgcolor_iter != m_node->styles.end()) ? bgcolor_iter->second : "transparent" };
+	if (bgcolor != "transparent") {
+		auto color = parse_color(bgcolor);
+		if (color) {
+			auto rect = DrawRect::create(self_rect(), *color);
+			commands.push_back(rect);
+		}
+	}
+
+	if (m_node->type == NodeType::Text) {
+		return;
+	}
+	auto element = static_cast<Element const&>(*m_node);
+
+	std::string text;
+	if (element.tag == "input") {
+		if (auto v = element.attributes.find("value"); v != element.attributes.end()) {
+			text = v->second;
+		}
+	} else if (element.tag == "button") {
+		if (element.children.size() == 1 && element.children[0]->type == NodeType::Text) {
+			text = static_cast<Text const&>(*element.children[0]).text;
+		} else {
+			std::cerr << "Ignoring HTML contents inside button" << std::endl;
+		}
+	}
+
+	if (m_node->is_focused) {
+		auto cx = m_x + m_font->measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+		commands.push_back(DrawLine::create(cx, m_y, cx, m_y + m_height, SK_ColorBLACK, 1));
+	}
+
+	auto color_str { m_node->styles["color"] };
+	auto color { parse_color(color_str).value_or(SK_ColorBLACK) };
+	auto cmd { DrawText::create(m_x, m_y, m_width, m_height, text, m_font, color) };
+	commands.push_back(cmd);
+}
+
+std::vector<std::shared_ptr<Node>> InputLayout::nodes() const {
+	return std::vector{m_node};
 }
 
 TextLayout::TextLayout(std::shared_ptr<Node> node, std::string word, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
@@ -209,10 +309,19 @@ void LineLayout::layout(FontCache& font_cache) {
 
 	std::vector<SkFontMetrics> metrics(m_children.size());
 	std::transform(m_children.begin(), m_children.end(), metrics.begin(), [](auto const& child) {
-		auto text = dynamic_cast<TextLayout const*>(&*child);
-		assert(text != nullptr && "Children should only be text nodes");
+		auto f = [&]() -> std::shared_ptr<SkFont> {
+			auto text = dynamic_cast<TextLayout const*>(&*child);
+			auto input = dynamic_cast<InputLayout const*>(&*child);
+			if (text) {
+				return text->m_font;
+			} else if (input) {
+				return input->m_font;
+			} else {
+				assert(false && "Children should only be text or input nodes");
+			}
+		}();
 		SkFontMetrics m;
-		text->m_font->getMetrics(&m);
+		f->getMetrics(&m);
 		return m;
 	});
 
@@ -256,6 +365,11 @@ BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_p
 LayoutMode BlockLayout::layout_mode() const {
 	if (std::ranges::all_of(m_nodes, [](std::shared_ptr<Node> n) { return n->type == NodeType::Text; })) {
 		return LayoutMode::Inline;
+	// todo: we may have solved this problem already
+	// edit: i think we did!
+	// } else if (std::ranges::any_of(m_nodes, [](auto n) { return !n->children.empty() || (n->type == NodeType::Element && static_cast<Element const&>(*n).tag == "input"); })) {
+		// any child has kids or is an input element
+		// return LayoutMode::Inline;
 	}
 	for (auto const& node : m_nodes) {
 		for (auto const& child : node->children) {
@@ -271,6 +385,16 @@ LayoutMode BlockLayout::layout_mode() const {
 		return LayoutMode::Inline;
 	}
 	return LayoutMode::Block;
+}
+
+bool BlockLayout::should_paint() const {
+	return std::ranges::any_of(m_nodes, [](auto n) {
+		if (n->type == NodeType::Text) {
+			return true;
+		}
+		auto el = static_cast<Element const&>(*n);
+		return el.tag != "input" && el.tag != "button";
+	});
 }
 
 // todo: BlockLayout::layout can have multiple nodes
@@ -378,7 +502,7 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 			if (bgcolor != "transparent") {
 				auto color = parse_color(bgcolor);
 				if (color) {
-					auto rect = DrawRect::create(SkRect::MakeLTRB(m_x, m_y, m_x + m_width, m_y + m_height), *color);
+					auto rect = DrawRect::create(self_rect(), *color);
 					commands.push_back(rect);
 				}
 			}
@@ -430,9 +554,12 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 		Element const& element = static_cast<Element const&>(*node);
 		if (element.tag == "br") {
 			new_line(node);
-		}
-		for (auto child : element.children) {
-			recurse(child, font_cache);
+		} else if (element.tag == "input" || element.tag == "button") {
+			input(node, font_cache);
+		} else {
+			for (auto child : element.children) {
+				recurse(child, font_cache);
+			}
 		}
 		if (element.tag == "p") {
 			// todo: move to css? margin bottom?
@@ -442,6 +569,37 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 	} else {
 		assert(false && "unreachable");
 	}
+}
+
+void BlockLayout::input(std::shared_ptr<Node> node, FontCache& font_cache) {
+	auto w = INPUT_WIDTH_PX;
+	if (m_cursor_x + w > m_width) {
+		new_line(node);
+	}
+	assert(!m_children.empty());
+	auto line = m_children.back();
+	auto previous_word = !line->m_children.empty() ? line->m_children.back() : nullptr;
+	auto input = std::make_shared<InputLayout>(node, line, previous_word);
+	line->m_children.push_back(input);
+
+	bool is_bold = false;
+	if (node->styles.find("font-weight")->second == "bold") {
+		is_bold = true;
+	}
+
+	bool is_italic = false;
+	if (node->styles.find("font-style")->second == "italic") {
+		is_italic = true;
+	}
+
+	std::string_view font_family { node->styles.find("font-family")->second };
+	std::string_view size_str { node->styles.find("font-size")->second };
+	// todo: no alloc, no exception, add someting like this to utils?
+	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
+	size = static_cast<float>(size) * 0.75;
+
+	auto font = font_cache.get_font(font_family, size, is_bold, is_italic);
+	m_cursor_x += w + font->measureText(" ", 1, SkTextEncoding::kUTF8);
 }
 
 void BlockLayout::word(std::string_view word, std::shared_ptr<Node> node, SkFont& font) {
@@ -565,7 +723,9 @@ std::vector<std::shared_ptr<Node>> DocumentLayout::nodes() const {
 }
 
 void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& commands) {
-	layout.paint(commands);
+	if (layout.should_paint()) {
+		layout.paint(commands);
+	}
 
 	for (auto child : layout.m_children) {
 		paint_tree(*child, commands);

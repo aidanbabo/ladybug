@@ -17,6 +17,7 @@ struct Node {
 	std::weak_ptr<Node> parent;
 	NodeType type;
 	std::unordered_map<std::string, std::string> styles{};
+	bool is_focused = false;
 
 	Node(std::weak_ptr<Node> parent, NodeType type);
 	void style(StyleSheet const& rules);

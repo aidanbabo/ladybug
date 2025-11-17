@@ -42,6 +42,7 @@
 #include <ctime>
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -111,6 +112,7 @@ class Tab {
 	int m_height;
 	StyleSheet m_default_style_sheet;
 	std::shared_ptr<Node> m_nodes{};
+	StyleSheet m_rules{};
 	std::shared_ptr<DocumentLayout> m_document{};
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list{};
 	std::vector<URL> m_history{};
@@ -118,9 +120,10 @@ class Tab {
 	ConnectionManager m_connection_manager;
 	int m_scroll = 0;
 	URL m_url = URL::ABOUT_BLANK;
+	std::shared_ptr<Element> m_focus;
 
 public:
-	void load(URL url, FontCache& font_cache, bool alter_history) {
+	void load(URL url, std::optional<std::string> payload, FontCache& font_cache, bool alter_history) {
 		if (m_url.equal_disregarding_fragment(url)) {
 			if (url.fragment == "") {
 				m_scroll = 0;
@@ -151,7 +154,7 @@ public:
 				}
 			}
 		} else {
-			std::optional<std::string> body = m_connection_manager.request(url);
+			std::optional<std::string> body = m_connection_manager.request(url, payload);
 			if (!body) {
 				std::cerr << "Failed to load new document" << std::endl;
 				return;
@@ -160,7 +163,7 @@ public:
 			m_scroll = 0;
 			m_nodes = HTMLParser(*body).parse();
 			assert(m_nodes->type == NodeType::Element);
-			StyleSheet rules = m_default_style_sheet;
+			m_rules = m_default_style_sheet;
 			std::vector<std::shared_ptr<Node>> nodes;
 			html_tree_to_list(m_nodes, nodes);
 			// true means we must fetch, false means inline
@@ -218,20 +221,14 @@ public:
 					}
 					continue;
 				}
-				rules.rules.insert(rules.rules.end(), sh->rules.begin(), sh->rules.end());
+				m_rules.rules.insert(m_rules.rules.end(), sh->rules.begin(), sh->rules.end());
 			}
 
 			// stable sort so file order breaks the rule (first file first!)
-			std::ranges::stable_sort(rules.rules, {}, [](auto p) {
+			std::ranges::stable_sort(m_rules.rules, {}, [](auto p) {
 				return p.first->priority;
 			});
-			m_nodes->style(rules);
-			//print_node(*m_nodes);
-			m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-			m_document->layout(font_cache);
-			//m_document->print_layout();
-			m_display_list.clear();
-			paint_tree(*m_document, m_display_list);
+			render(font_cache);
 		}
 
 		m_url = url;
@@ -241,6 +238,52 @@ public:
 			m_history.push_back(url);
 			m_history_index++;
 		}
+	}
+
+	std::optional<std::pair<URL, std::optional<std::string>>> submit_form(std::shared_ptr<Element> node) {
+		auto url = m_url.resolve(node->attributes["action"]);
+		if (!url) {
+			return std::nullopt;
+		}
+
+		std::vector<std::shared_ptr<Node>> inputs;
+		html_tree_to_list(node, inputs);
+		inputs.erase(std::remove_if(inputs.begin(), inputs.end(), [](auto n){
+			if (n->type != NodeType::Element) {
+				return true;
+			}
+			auto el = std::static_pointer_cast<Element>(n);
+			return el->tag != "input" || !el->attributes.contains("name");
+		}), inputs.end());
+
+		std::string body{};
+		for (auto const& node : inputs) {
+			auto input = std::static_pointer_cast<Element>(node);
+			std::string_view name { input->attributes["name"] };
+			std::string_view value;
+			auto v = input->attributes.find("value");
+			if (v != input->attributes.end()) {
+				value = v->second;
+			}
+			body.push_back('&');
+			body.append(url_encode(name));
+			body.push_back('=');
+			body.append(url_encode(value));
+		}
+		if (!body.empty()) {
+			body = body.substr(1);
+		}
+		return std::make_pair(*url, body);
+	}
+
+	void render(FontCache& font_cache) {
+		m_nodes->style(m_rules);
+		//print_node(*m_nodes);
+		m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
+		m_document->layout(font_cache);
+		//m_document->print_layout();
+		m_display_list.clear();
+		paint_tree(*m_document, m_display_list);
 	}
 	
 	void draw(SkCanvas *canvas, float offset) {
@@ -274,7 +317,7 @@ public:
 	bool go_back(FontCache& font_cache) {
 		if (can_go_back()) {
 			m_history_index--;
-			load(m_history[m_history_index], font_cache, false);
+			load(m_history[m_history_index], std::nullopt, font_cache, false);
 			return true;
 		}
 		return false;
@@ -287,7 +330,7 @@ public:
 	bool go_forward(FontCache& font_cache) {
 		if (can_go_forward()) {
 			m_history_index++;
-			load(m_history[m_history_index], font_cache, false);
+			load(m_history[m_history_index], std::nullopt, font_cache, false);
 			return true;
 		}
 		return false;
@@ -316,6 +359,16 @@ public:
 		clamp_scroll();
 	}
 
+	void keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
+		if (m_focus != nullptr) {
+			if (event.key >= 0x20 && event.key < 0x7f) {
+				char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
+				m_focus->attributes["value"].push_back(c);
+				render(font_cache);
+			}
+		}
+	}
+
 	std::optional<std::string> title() {
 		std::vector<std::shared_ptr<Node>> nodes;
 		html_tree_to_list(m_nodes, nodes);
@@ -338,7 +391,12 @@ public:
 	}
 
 	// If there is navigation involved, a value is returned for the browser to navigate to.
-	std::optional<URL> click(float x, float y) {
+	// todo: I think we're gettingo the point where passing around the font_cache is getting annoying.
+	std::optional<std::pair<URL, std::optional<std::string>>> click(float x, float y, FontCache& font_cache) {
+		if (m_focus) {
+			m_focus->is_focused = false;
+			m_focus = nullptr;
+		}
 		y += m_scroll;
 		std::vector<std::shared_ptr<LayoutBase>> objs;
 		layout_tree_to_list(m_document, objs);
@@ -349,24 +407,48 @@ public:
 		if (objs.empty()) {
 			return std::nullopt;
 		}
-		// todo: this is a hack so we can only click on text elements AND so that we
+		// todo: this is a hack so we can only click on text/input elements AND so that we
 		// don't have to make a virtual function to get the current node from an element
 		// since BlockLayouts can have multiple nodes.
-		if (auto text = dynamic_cast<TextLayout *>(&*objs.back())) {
-			Node const *elt = &*text->m_node;
+		auto elt = [&]() -> std::shared_ptr<Node> {
+			if (auto text = dynamic_cast<TextLayout *>(&*objs.back())) {
+				return text->m_node;
+			} else if (auto input = dynamic_cast<InputLayout *>(&*objs.back())) {
+				return input->m_node;
+			} else {
+				return nullptr;
+			}
+		}();
+		if (elt) {
 			while (elt != nullptr) {
 				if (elt->type == NodeType::Element) {
-					auto el = static_cast<Element const*>(elt);
+					auto el = std::static_pointer_cast<Element>(elt);
 					if (el->tag == "a") {
 						if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
 							if (auto url = m_url.resolve(href->second)) {
-								return url;
+								return std::make_pair(*url, std::nullopt);
 							}
+						}
+					} else if (el->tag == "input") {
+						el->attributes["value"] = "";
+						m_focus = el;
+						el->is_focused = true;
+						render(font_cache);
+						return std::nullopt;
+					} else if (el->tag == "button") {
+						while (el != nullptr) {
+							if (el->tag == "form" && el->attributes.contains("action")) {
+								return submit_form(el);
+							}
+							auto parent = el->parent.lock();
+							assert(parent->type == NodeType::Element);
+							el = std::static_pointer_cast<Element>(parent);
 						}
 					}
 				}
-				elt = &*elt->parent.lock();
+				elt = elt->parent.lock();
 			}
+			render(font_cache);
 		}
 		return std::nullopt;
 	}
@@ -476,6 +558,10 @@ public:
 		}
 	}
 
+	void blur() {
+		m_focus = Focus::Nothing;
+	}
+
 	void enter(Browser& browser);
 	void click(Browser& browser, float x, float y);
 	void paint(Browser const& browser, std::vector<std::shared_ptr<DrawCommand>>& commands);
@@ -501,6 +587,13 @@ class Browser {
 	std::vector<std::unique_ptr<Tab>> m_tabs{};
 	size_t m_active_tab{};
 	Chrome m_chrome;
+
+	enum class Focus {
+		Nothing,
+		Chrome,
+		Content,
+	};
+	Focus m_focus{Focus::Nothing};
 
 	friend class Chrome;
 
@@ -549,9 +642,9 @@ public:
 		return std::make_unique<Browser>(width, height, window, renderer, texture, root_surface, info, font_mgr, font_cache);
 	}
 
-	void new_tab(URL url) {
+	void new_tab(URL url, std::optional<std::string> payload = std::nullopt) {
 		auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom);
-		new_tab->load(url, m_font_cache, true);
+		new_tab->load(url, payload, m_font_cache, true);
 		m_tabs.push_back(std::move(new_tab));
 		set_active_tab(m_tabs.size() - 1);
 		draw();
@@ -621,20 +714,26 @@ public:
 		draw();
 	}
 
-	void click(ClickType type, float x, float y) {
+	void handle_click(ClickType type, float x, float y) {
 		if (y < m_chrome.m_bottom) {
+			m_focus = Focus::Chrome;
+			// todo:
+			// m_tabs[m_active_tab].blur();
 			if (type == ClickType::Left) {
 				m_chrome.click(*this, x, y);
 			}
 		} else {
+			m_focus = Focus::Content;
+			m_chrome.blur();
 			if (type != ClickType::Right) {
 				float tab_y = y - m_chrome.m_bottom;
-				auto url = m_tabs[m_active_tab]->click(x, tab_y);
-				if (url) {
+				auto request = m_tabs[m_active_tab]->click(x, tab_y, m_font_cache);
+				if (request) {
+					auto [url, payload] = *request;
 					if (type == ClickType::Left) {
-						m_tabs[m_active_tab]->load(*url, m_font_cache, true);
+						m_tabs[m_active_tab]->load(url, payload, m_font_cache, true);
 					} else {
-						new_tab(*url);
+						new_tab(url, payload);
 					}
 					set_window_title();
 				}
@@ -647,17 +746,26 @@ public:
 		if (event.type == SDL_EVENT_KEY_UP) {
 			return;
 		}
+
 		if (event.key == SDLK_DOWN) {
 			scroll_down();
 		} else if (event.key == SDLK_UP) {
 			scroll_up();
-		} else if (event.key == SDLK_RETURN) {
-			m_chrome.enter(*this);
-		} else if (event.key == SDLK_BACKSPACE) {
-			m_chrome.backspace();
-		} else if (event.key >= 0x20 && event.key < 0x7f) {
-			char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
-			m_chrome.keypress(c);
+		} else if (m_focus == Focus::Nothing) {
+			// nothing
+		} else if (m_focus == Focus::Chrome) {
+			if (event.key == SDLK_RETURN) {
+				m_chrome.enter(*this);
+			} else if (event.key == SDLK_BACKSPACE) {
+				m_chrome.backspace();
+			} else if (event.key >= 0x20 && event.key < 0x7f) {
+				char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
+				m_chrome.keypress(c);
+			}
+		} else if (m_focus == Focus::Content) {
+			m_tabs[m_active_tab]->keypress(event, m_font_cache);
+		} else {
+			assert(false && "unreachable");
 		}
 		draw();
 	}
@@ -695,7 +803,7 @@ public:
 void Chrome::enter(Browser& browser) {
 	if (m_focus == Focus::AddressBar) {
 		if (auto url = URL::create(m_address_bar)) {
-			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache, true);
+			browser.m_tabs[browser.m_active_tab]->load(*url, std::nullopt, browser.m_font_cache, true);
 			m_focus = Focus::Nothing;
 			browser.set_window_title();
 		}
@@ -827,11 +935,11 @@ int main(int argc, char** argv) {
 				}
 			} else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
 				if (event.button.button == 1) {
-					browser->click(ClickType::Left, event.button.x, event.button.y);
+					browser->handle_click(ClickType::Left, event.button.x, event.button.y);
 				} else if (event.button.button == 2) {
-					browser->click(ClickType::Middle, event.button.x, event.button.y);
+					browser->handle_click(ClickType::Middle, event.button.x, event.button.y);
 				} else if (event.button.button == 3) {
-					browser->click(ClickType::Right, event.button.x, event.button.y);
+					browser->handle_click(ClickType::Right, event.button.x, event.button.y);
 				}
 			}
 		}

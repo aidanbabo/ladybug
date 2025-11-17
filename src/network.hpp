@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 void network_init();
+std::string url_encode(std::string_view s);
 
 struct URL {
 	bool view_source;
@@ -48,11 +49,11 @@ class ConnectionManager {
 public:
 	ConnectionManager();
 	~ConnectionManager();
-	std::optional<std::string> request(URL url);
+	std::optional<std::string> request(URL url, std::optional<std::string> payload = std::nullopt);
 	void print_active_connections() const;
 private:
 	std::optional<std::string> load_file(URL url) const;
-	std::optional<std::string> load_http_or_from_cache(URL url);
+	std::optional<std::string> load_http_or_from_cache(URL url, std::optional<std::string> payload);
 	std::optional<std::string> try_load_from_cache(URL url);
 	void store_in_cache_if_cachable(URL url, HttpResponse response);
 };

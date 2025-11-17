@@ -26,14 +26,30 @@ struct LayoutBase : public std::enable_shared_from_this<LayoutBase> {
 	std::weak_ptr<LayoutBase> m_parent;
 	std::vector<std::shared_ptr<LayoutBase>> m_children;
 
+	SkRect self_rect() const;
+
 	explicit LayoutBase(std::weak_ptr<LayoutBase> parent);
 	virtual void layout(FontCache& font_cache) = 0;
+	virtual bool should_paint() const;
 	virtual void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const = 0;
 	virtual std::vector<std::shared_ptr<Node>> nodes() const = 0;
 	void print_layout(int indent = 0) const;
 	virtual ~LayoutBase() = default;
 private:
 	virtual void print() const = 0;
+};
+
+struct InputLayout : public LayoutBase {
+	std::shared_ptr<Node> m_node;
+	std::weak_ptr<LayoutBase> m_previous;
+	std::shared_ptr<SkFont> m_font;
+
+	InputLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous);
+	void layout(FontCache& font_cache) override;
+	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
+	void print() const override;
+	std::vector<std::shared_ptr<Node>> nodes() const override;
+	~InputLayout() = default;
 };
 
 struct TextLayout : public LayoutBase {
@@ -73,6 +89,7 @@ class BlockLayout : public LayoutBase {
 public:
 	BlockLayout(std::vector<std::shared_ptr<Node>> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
 	void layout(FontCache& font_cache) override;
+	bool should_paint() const override;
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
 	std::vector<std::shared_ptr<Node>> nodes() const override;
@@ -81,6 +98,7 @@ public:
 private:
 	void recurse(std::shared_ptr<Node> node, FontCache& font_cache);
 	void word(std::string_view word, std::shared_ptr<Node> node, SkFont& font);
+	void input(std::shared_ptr<Node> node, FontCache& font_cache);
 	void new_line(std::shared_ptr<Node> node);
 	LayoutMode layout_mode() const;
 };
