@@ -220,13 +220,15 @@ public:
 		return m_url;
 	}
 
-	void go_back(FontCache& font_cache) {
+	bool go_back(FontCache& font_cache) {
 		if (m_history.size() > 1) {
 			m_history.pop_back();
 			auto back = m_history.back();
 			m_history.pop_back();
 			load(back, font_cache);
+			return true;
 		}
+		return false;
 	}
 
 	void clamp_scroll() {
@@ -250,6 +252,27 @@ public:
 	void scroll_down() {
 		m_scroll += SCROLL_STEP;
 		clamp_scroll();
+	}
+
+	std::optional<std::string> title() {
+		std::vector<std::shared_ptr<Node>> nodes;
+		html_tree_to_list(m_nodes, nodes);
+		auto el = std::find_if(nodes.begin(), nodes.end(), [](auto n) {
+			if (n->type != NodeType::Element) {
+				return false;
+			}
+			auto e = static_cast<Element const&>(*n);
+			return e.tag == "title";
+		});
+		if (el == nodes.end()) {
+			return std::nullopt;
+		} else {
+			auto children = (*el)->children;
+			if (children.size() != 1 || children[0]->type != NodeType::Text) {
+				return std::nullopt;
+			}
+			return static_cast<Text const&>(*children[0]).text;
+		}
 	}
 
 	// If there is navigation involved, a value is returned for the browser to navigate to.
@@ -464,8 +487,21 @@ public:
 		auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom);
 		new_tab->load(url, m_font_cache);
 		m_tabs.push_back(std::move(new_tab));
-		m_active_tab = m_tabs.size() - 1;
+		set_active_tab(m_tabs.size() - 1);
 		draw();
+	}
+
+	void set_active_tab(size_t index) {
+		m_active_tab = index;
+		set_window_title();
+	}
+
+	void set_window_title() {
+		if (auto title = m_tabs[m_active_tab]->title()) {
+			SDL_SetWindowTitle(m_window, title->data());
+		} else {
+			SDL_SetWindowTitle(m_window, "Ladybug");
+		}
 	}
 
 	void draw() {
@@ -534,6 +570,7 @@ public:
 					} else {
 						new_tab(*url);
 					}
+					set_window_title();
 				}
 			}
 		}
@@ -594,6 +631,7 @@ void Chrome::enter(Browser& browser) {
 		if (auto url = URL::create(m_address_bar)) {
 			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache);
 			m_focus = Focus::Nothing;
+			browser.set_window_title();
 		}
 	}
 }
@@ -604,14 +642,17 @@ void Chrome::click(Browser& browser, float x, float y) {
 	if (m_newtab_rect.contains(x, y)) {
 		browser.new_tab(URL::create("https://browser.engineering").value_or(URL::ABOUT_BLANK));
 	} else if (m_back_rect.contains(x, y)) {
-		browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
+		bool navigated = browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
+		if (navigated) {
+			browser.set_window_title();
+		}
 	} else if (m_address_rect.contains(x, y)) {
 		m_focus = Focus::AddressBar;
 		m_address_bar = std::string{};
 	} else {
 		for (size_t i = 0; i < browser.m_tabs.size(); i++) {
 			if (tab_rect(i).contains(x, y)) {
-				browser.m_active_tab = i;
+				browser.set_active_tab(i);
 				break;
 			}
 		}
