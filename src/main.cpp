@@ -381,6 +381,12 @@ public:
 		}
 	}
 
+	void backspace() {
+		if (m_focus == Focus::AddressBar && !m_address_bar.empty()) {
+			m_address_bar.pop_back();
+		}
+	}
+
 	void enter(Browser& browser);
 	void click(Browser& browser, float x, float y);
 	void paint(Browser const& browser, std::vector<std::shared_ptr<DrawCommand>>& commands);
@@ -525,6 +531,8 @@ public:
 			scroll_up();
 		} else if (event.key == SDLK_RETURN) {
 			m_chrome.enter(*this);
+		} else if (event.key == SDLK_BACKSPACE) {
+			m_chrome.backspace();
 		} else if (event.key >= 0x20 && event.key < 0x7f) {
 			char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
 			m_chrome.keypress(c);
