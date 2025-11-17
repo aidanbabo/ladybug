@@ -9,6 +9,8 @@
 // todo: Exercise 6-10: :has selectors -> Also not interested AND it would be slow AND maybe I could find a fast impl but i'm NOT interested
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
+//
+// todo: erase_if replaces the erase-remove idiom c++20
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -105,12 +107,13 @@ class Tab {
 	std::shared_ptr<DocumentLayout> m_document{};
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list{};
 	std::vector<URL> m_history{};
+	size_t m_history_index = -1;
 	ConnectionManager m_connection_manager;
 	int m_scroll = 0;
 	URL m_url = URL::ABOUT_BLANK;
 
 public:
-	void load(URL url, FontCache& font_cache) {
+	void load(URL url, FontCache& font_cache, bool alter_history) {
 		std::optional<std::string> body = m_connection_manager.request(url);
 		if (!body) {
 			std::cerr << "Failed to load new document" << std::endl;
@@ -118,7 +121,13 @@ public:
 		}
 
 		m_url = url;
-		m_history.push_back(url);
+
+		if (alter_history) {
+			m_history.erase(m_history.begin() + m_history_index + 1, m_history.end());
+			m_history.push_back(url);
+			m_history_index++;
+		}
+
 		m_scroll = 0;
 		m_nodes = HTMLParser(*body).parse();
 		assert(m_nodes->type == NodeType::Element);
@@ -220,12 +229,27 @@ public:
 		return m_url;
 	}
 
+	bool can_go_back() const {
+		return m_history_index > 0;
+	}
+
 	bool go_back(FontCache& font_cache) {
-		if (m_history.size() > 1) {
-			m_history.pop_back();
-			auto back = m_history.back();
-			m_history.pop_back();
-			load(back, font_cache);
+		if (can_go_back()) {
+			m_history_index--;
+			load(m_history[m_history_index], font_cache, false);
+			return true;
+		}
+		return false;
+	}
+
+	bool can_go_forward() const {
+		return m_history_index < m_history.size() - 1;
+	}
+
+	bool go_forward(FontCache& font_cache) {
+		if (can_go_forward()) {
+			m_history_index++;
+			load(m_history[m_history_index], font_cache, false);
 			return true;
 		}
 		return false;
@@ -353,6 +377,8 @@ class Chrome {
 	float m_bottom;
 	float m_back_width;
 	SkRect m_back_rect;
+	float m_forward_width;
+	SkRect m_forward_rect;
 	SkRect m_address_rect;
 
 	enum class Focus {
@@ -385,7 +411,9 @@ public:
 
 		m_back_width = m_font->measureText("<", 1, SkTextEncoding::kUTF8) + 2 * m_padding;
 		m_back_rect = SkRect::MakeLTRB(m_padding, m_urlbar_top + m_padding, m_padding + m_back_width, m_urlbar_bottom - m_padding);
-		m_address_rect = SkRect::MakeLTRB(m_back_rect.fTop + m_padding, m_urlbar_top + m_padding, m_width - m_padding, m_urlbar_bottom - m_padding);
+		m_forward_width = m_font->measureText(">", 1, SkTextEncoding::kUTF8) + 2 * m_padding;
+		m_forward_rect = SkRect::MakeLTRB(m_back_rect.fRight + m_padding, m_urlbar_top + m_padding, m_back_rect.fRight + m_padding + m_forward_width, m_urlbar_bottom - m_padding);
+		m_address_rect = SkRect::MakeLTRB(m_forward_rect.fRight + m_padding, m_urlbar_top + m_padding, m_width - m_padding, m_urlbar_bottom - m_padding);
 	}
 
 	SkRect tab_rect(int index) {
@@ -485,7 +513,7 @@ public:
 
 	void new_tab(URL url) {
 		auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom);
-		new_tab->load(url, m_font_cache);
+		new_tab->load(url, m_font_cache, true);
 		m_tabs.push_back(std::move(new_tab));
 		set_active_tab(m_tabs.size() - 1);
 		draw();
@@ -566,7 +594,7 @@ public:
 				auto url = m_tabs[m_active_tab]->click(x, tab_y);
 				if (url) {
 					if (type == ClickType::Left) {
-						m_tabs[m_active_tab]->load(*url, m_font_cache);
+						m_tabs[m_active_tab]->load(*url, m_font_cache, true);
 					} else {
 						new_tab(*url);
 					}
@@ -629,7 +657,7 @@ public:
 void Chrome::enter(Browser& browser) {
 	if (m_focus == Focus::AddressBar) {
 		if (auto url = URL::create(m_address_bar)) {
-			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache);
+			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache, true);
 			m_focus = Focus::Nothing;
 			browser.set_window_title();
 		}
@@ -643,6 +671,11 @@ void Chrome::click(Browser& browser, float x, float y) {
 		browser.new_tab(URL::create("https://browser.engineering").value_or(URL::ABOUT_BLANK));
 	} else if (m_back_rect.contains(x, y)) {
 		bool navigated = browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
+		if (navigated) {
+			browser.set_window_title();
+		}
+	} else if (m_forward_rect.contains(x, y)) {
+		bool navigated = browser.m_tabs[browser.m_active_tab]->go_forward(browser.m_font_cache);
 		if (navigated) {
 			browser.set_window_title();
 		}
@@ -678,8 +711,13 @@ void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawComma
 		}
 	}
 
-	commands.push_back(DrawOutline::create(m_back_rect, SK_ColorBLACK, 1));
-	commands.push_back(DrawText::create(m_back_rect.fLeft + m_padding, m_back_rect.fTop, m_back_width, "<", m_font, SK_ColorBLACK));
+	SkColor backward_color = browser.m_tabs[browser.m_active_tab]->can_go_back() ? SK_ColorBLACK : SK_ColorLTGRAY;
+	commands.push_back(DrawOutline::create(m_back_rect, backward_color, 1));
+	commands.push_back(DrawText::create(m_back_rect.fLeft + m_padding, m_back_rect.fTop, m_back_width, "<", m_font, backward_color));
+
+	SkColor forward_color = browser.m_tabs[browser.m_active_tab]->can_go_forward() ? SK_ColorBLACK : SK_ColorLTGRAY;
+	commands.push_back(DrawOutline::create(m_forward_rect, forward_color, 1));
+	commands.push_back(DrawText::create(m_forward_rect.fLeft + m_padding, m_forward_rect.fTop, m_forward_width, ">", m_font, forward_color));
 
 	commands.push_back(DrawOutline::create(m_address_rect, SK_ColorBLACK, 1));
 
