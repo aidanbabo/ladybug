@@ -252,7 +252,8 @@ public:
 		clamp_scroll();
 	}
 
-	void click(float x, float y, FontCache& font_cache) {
+	// If there is navigation involved, a value is returned for the browser to navigate to.
+	std::optional<URL> click(float x, float y) {
 		y += m_scroll;
 		std::vector<std::shared_ptr<LayoutBase>> objs;
 		layout_tree_to_list(m_document, objs);
@@ -261,7 +262,7 @@ public:
 			return b;
 		}), objs.end());
 		if (objs.empty()) {
-			return;
+			return std::nullopt;
 		}
 		// todo: this is a hack so we can only click on text elements AND so that we
 		// don't have to make a virtual function to get the current node from an element
@@ -271,12 +272,10 @@ public:
 			while (elt != nullptr) {
 				if (elt->type == NodeType::Element) {
 					auto el = static_cast<Element const*>(elt);
-					// this nesting is crazy
 					if (el->tag == "a") {
 						if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
 							if (auto url = m_url.resolve(href->second)) {
-								load(*url, font_cache);
-								return;
+								return url;
 							}
 						}
 					}
@@ -284,6 +283,7 @@ public:
 				elt = &*elt->parent.lock();
 			}
 		}
+		return std::nullopt;
 	}
 
 	void resize(int new_width, int new_height, FontCache& font_cache) {
@@ -354,7 +354,7 @@ public:
 		m_padding = 5;
 		m_tabbar_top = 0;
 		m_tabbar_bottom = m_font_height + 2 * m_padding;
-		m_plus_width = m_font->measureText("+", 1, SkTextEncoding::kUTF8);
+		m_plus_width = m_font->measureText("+", 1, SkTextEncoding::kUTF8) + 2 * m_padding;
 		m_newtab_rect = SkRect::MakeLTRB(m_padding, m_padding, m_padding + m_plus_width, m_padding + m_font_height);
 		m_urlbar_top = m_tabbar_bottom;
 		m_urlbar_bottom = m_urlbar_top + m_font_height + 2 * m_padding;
@@ -390,6 +390,12 @@ public:
 	void enter(Browser& browser);
 	void click(Browser& browser, float x, float y);
 	void paint(Browser const& browser, std::vector<std::shared_ptr<DrawCommand>>& commands);
+};
+
+enum class ClickType {
+	Left,
+	Middle,
+	Right,
 };
 
 class Browser {
@@ -505,18 +511,31 @@ public:
 
 	void scroll_up() {
 		m_tabs[m_active_tab]->scroll_up();
+		draw();
 	}
 
 	void scroll_down() {
 		m_tabs[m_active_tab]->scroll_down();
+		draw();
 	}
 
-	void click(float x, float y) {
+	void click(ClickType type, float x, float y) {
 		if (y < m_chrome.m_bottom) {
-			m_chrome.click(*this, x, y);
+			if (type == ClickType::Left) {
+				m_chrome.click(*this, x, y);
+			}
 		} else {
-			float tab_y = y - m_chrome.m_bottom;
-			m_tabs[m_active_tab]->click(x, tab_y, m_font_cache);
+			if (type != ClickType::Right) {
+				float tab_y = y - m_chrome.m_bottom;
+				auto url = m_tabs[m_active_tab]->click(x, tab_y);
+				if (url) {
+					if (type == ClickType::Left) {
+						m_tabs[m_active_tab]->load(*url, m_font_cache);
+					} else {
+						new_tab(*url);
+					}
+				}
+			}
 		}
 		draw();
 	}
@@ -696,12 +715,11 @@ int main(int argc, char** argv) {
 				}
 			} else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
 				if (event.button.button == 1) {
-					// mouse 1 (left click)
-					browser->click(event.button.x, event.button.y);
+					browser->click(ClickType::Left, event.button.x, event.button.y);
 				} else if (event.button.button == 2) {
-					// middle mouse
+					browser->click(ClickType::Middle, event.button.x, event.button.y);
 				} else if (event.button.button == 3) {
-					// mouse 2 (right click)
+					browser->click(ClickType::Right, event.button.x, event.button.y);
 				}
 			}
 		}
