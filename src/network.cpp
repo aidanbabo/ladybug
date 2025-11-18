@@ -928,7 +928,10 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url, s
 			m_active_connections.erase(reusable_base);
 		}
 
-		store_in_cache_if_cachable(url, *response);
+		// todo: this is a hack to prevent caching POST requests
+		if (!payload) {
+			store_in_cache_if_cachable(url, *response);
+		}
 
 		if (response->status >= 300 && response->status < 400) {
 			if (auto location_iter = response->headers.find("location"); location_iter != response->headers.end()) {

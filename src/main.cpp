@@ -124,7 +124,7 @@ class Tab {
 
 public:
 	void load(URL url, std::optional<std::string> payload, FontCache& font_cache, bool alter_history) {
-		if (m_url.equal_disregarding_fragment(url)) {
+		if (m_url.equal_disregarding_fragment(url) && !payload /* hack for resubmitting forms */) {
 			if (url.fragment == "") {
 				m_scroll = 0;
 			} else {
@@ -306,8 +306,36 @@ public:
 
 	}
 
+	std::optional<std::string> title() {
+		std::vector<std::shared_ptr<Node>> nodes;
+		html_tree_to_list(m_nodes, nodes);
+		auto el = std::find_if(nodes.begin(), nodes.end(), [](auto n) {
+			if (n->type != NodeType::Element) {
+				return false;
+			}
+			auto e = static_cast<Element const&>(*n);
+			return e.tag == "title";
+		});
+		if (el == nodes.end()) {
+			return std::nullopt;
+		} else {
+			auto children = (*el)->children;
+			if (children.size() != 1 || children[0]->type != NodeType::Text) {
+				return std::nullopt;
+			}
+			return static_cast<Text const&>(*children[0]).text;
+		}
+	}
+
 	URL const& url() const {
 		return m_url;
+	}
+
+	void blur() {
+		if (m_focus) {
+			m_focus->is_focused = false;
+			m_focus = nullptr;
+		}
 	}
 
 	bool can_go_back() const {
@@ -359,39 +387,31 @@ public:
 		clamp_scroll();
 	}
 
-	void keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
+	[[nodiscard]]
+	std::optional<std::pair<URL, std::optional<std::string>>> keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
 		if (m_focus != nullptr) {
 			if (event.key >= 0x20 && event.key < 0x7f) {
 				char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
 				m_focus->attributes["value"].push_back(c);
 				render(font_cache);
+			} else if (event.key == SDLK_RETURN) {
+				auto el = m_focus;
+				while (el != nullptr) {
+					if (el->tag == "form" && el->attributes.contains("action")) {
+						return submit_form(el);
+					}
+					auto parent = el->parent.lock();
+					assert(parent->type == NodeType::Element);
+					el = std::static_pointer_cast<Element>(parent);
+				}
 			}
 		}
-	}
-
-	std::optional<std::string> title() {
-		std::vector<std::shared_ptr<Node>> nodes;
-		html_tree_to_list(m_nodes, nodes);
-		auto el = std::find_if(nodes.begin(), nodes.end(), [](auto n) {
-			if (n->type != NodeType::Element) {
-				return false;
-			}
-			auto e = static_cast<Element const&>(*n);
-			return e.tag == "title";
-		});
-		if (el == nodes.end()) {
-			return std::nullopt;
-		} else {
-			auto children = (*el)->children;
-			if (children.size() != 1 || children[0]->type != NodeType::Text) {
-				return std::nullopt;
-			}
-			return static_cast<Text const&>(*children[0]).text;
-		}
+		return std::nullopt;
 	}
 
 	// If there is navigation involved, a value is returned for the browser to navigate to.
 	// todo: I think we're gettingo the point where passing around the font_cache is getting annoying.
+	[[nodiscard]]
 	std::optional<std::pair<URL, std::optional<std::string>>> click(float x, float y, FontCache& font_cache) {
 		if (m_focus) {
 			m_focus->is_focused = false;
@@ -717,8 +737,8 @@ public:
 	void handle_click(ClickType type, float x, float y) {
 		if (y < m_chrome.m_bottom) {
 			m_focus = Focus::Chrome;
-			// todo:
-			// m_tabs[m_active_tab].blur();
+			m_tabs[m_active_tab]->blur();
+			m_tabs[m_active_tab]->render(m_font_cache);
 			if (type == ClickType::Left) {
 				m_chrome.click(*this, x, y);
 			}
@@ -763,7 +783,11 @@ public:
 				m_chrome.keypress(c);
 			}
 		} else if (m_focus == Focus::Content) {
-			m_tabs[m_active_tab]->keypress(event, m_font_cache);
+			auto navigation = m_tabs[m_active_tab]->keypress(event, m_font_cache);
+			if (navigation) {
+				auto [url, payload] = *navigation;
+				m_tabs[m_active_tab]->load(url, payload, m_font_cache, true);
+			}
 		} else {
 			assert(false && "unreachable");
 		}
