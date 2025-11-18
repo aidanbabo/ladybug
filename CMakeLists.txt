@@ -7,6 +7,7 @@ find_package(Fontconfig REQUIRED)
 find_package(harfbuzz CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(unofficial-skia CONFIG REQUIRED)
+find_package(unofficial-duktape CONFIG REQUIRED)
 
 add_executable(ladybug
 	src/main.cpp
@@ -17,6 +18,7 @@ add_executable(ladybug
 	src/css_parser.cpp
 	src/draw.cpp
 	src/font_cache.cpp
+	src/ui.cpp
 )
 
 target_link_libraries(ladybug PRIVATE z ssl crypto)
@@ -26,5 +28,6 @@ target_link_libraries(ladybug PRIVATE Fontconfig::Fontconfig)
 target_link_libraries(ladybug PRIVATE harfbuzz::harfbuzz)
 target_link_libraries(ladybug PRIVATE SDL3::SDL3)
 target_link_libraries(ladybug PRIVATE unofficial::skia::skia)
+target_link_libraries(ladybug PRIVATE unofficial::duktape::duktape)
 
 target_compile_options(ladybug PRIVATE -g -Wall -Wextra -Wpedantic)

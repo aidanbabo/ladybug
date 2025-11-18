@@ -122,3 +122,6 @@ private:
 	std::optional<std::shared_ptr<Selector>> selector();
 	bool shorthand_property_extras(std::unordered_map<std::string, std::string>& pairs, std::string prop, std::string first);
 };
+
+// todo: make these functions generic or make a bad boy iterator
+void html_tree_to_list(std::shared_ptr<Node> node, std::vector<std::shared_ptr<Node>>& list);

@@ -731,3 +731,10 @@ void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawComman
 		paint_tree(*child, commands);
 	}
 }
+
+void layout_tree_to_list(std::shared_ptr<LayoutBase> node, std::vector<std::shared_ptr<LayoutBase>>& list) {
+	list.push_back(node);
+	for (auto const& c : node->m_children) {
+		layout_tree_to_list(c, list);
+	}
+}

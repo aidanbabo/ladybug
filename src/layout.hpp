@@ -116,3 +116,5 @@ public:
 };
 
 void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& display_list);
+// todo: make these functions generic or make a bad boy iterator
+void layout_tree_to_list(std::shared_ptr<LayoutBase> node, std::vector<std::shared_ptr<LayoutBase>>& list);

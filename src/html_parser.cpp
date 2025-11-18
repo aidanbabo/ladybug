@@ -359,3 +359,10 @@ void print_node(Node const& node, int indent) {
 		print_node(*child, indent + 2);
 	}
 }
+
+void html_tree_to_list(std::shared_ptr<Node> node, std::vector<std::shared_ptr<Node>>& list) {
+	list.push_back(node);
+	for (auto const& c : node->children) {
+		html_tree_to_list(c, list);
+	}
+}
