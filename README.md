@@ -36,3 +36,5 @@ Some of the exercises have been done, only the ones I find technically interesti
 - Scrolling and resizing the window
     - Scrolling via the mousewheel is a little chunky. My mouse wheel doesn't work so testing is difficult. Use the arrow keys.
 - Navigation through the URL bar, back/forward button and hyperlinks (`<a>` only).
+- Use GET/POST forms.
+    - Will try to prevent you from doing form-resubmission through an alert.

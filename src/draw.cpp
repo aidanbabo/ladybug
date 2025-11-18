@@ -26,7 +26,11 @@ std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, s
 }
 
 std::shared_ptr<DrawText> DrawText::create(float left, float top, float width, float height, std::string text, std::shared_ptr<SkFont> font, SkColor color) {
-	return std::make_shared<DrawText>(SkRect::MakeLTRB(left, top, left + width, top + height), text, font, color);
+	return DrawText::create(SkRect::MakeLTRB(left, top, left + width, top + height), text, font, color);
+}
+
+std::shared_ptr<DrawText> DrawText::create(SkRect rect, std::string text, std::shared_ptr<SkFont> font, SkColor color) {
+	return std::make_shared<DrawText>(rect, text, font, color);
 }
 
 void DrawText::execute(float scroll, SkCanvas& canvas) {

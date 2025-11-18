@@ -18,6 +18,7 @@ struct DrawText : public DrawCommand {
 	static std::shared_ptr<DrawText> create(float left, float top, std::string text, std::shared_ptr<SkFont> font, SkColor color);
 	static std::shared_ptr<DrawText> create(float left, float top, float width, std::string text, std::shared_ptr<SkFont> font, SkColor color);
 	static std::shared_ptr<DrawText> create(float left, float top, float width, float height, std::string text, std::shared_ptr<SkFont> font, SkColor color);
+	static std::shared_ptr<DrawText> create(SkRect rect, std::string text, std::shared_ptr<SkFont> font, SkColor color);
 
 	void execute(float scroll, SkCanvas& canvas) override;
 

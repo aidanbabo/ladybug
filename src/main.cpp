@@ -17,7 +17,8 @@
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 //
-// todo: erase_if replaces the erase-remove idiom c++20
+// todo: move Tab, Browser, Chrome and PopUp into an hpp/cpp pair to avoid
+// confusing definition order. It may even be right to put them each in their own file.
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -34,6 +35,7 @@
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
 
+#include <functional>
 #include <iostream>
 
 #include <cassert>
@@ -43,6 +45,7 @@
 
 #include <chrono>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
@@ -123,6 +126,12 @@ static std::string url_encode_parameters(std::vector<std::pair<std::string, std:
 	return out;
 }
 
+enum class HistoryNavigationAttempt {
+	NoNavigation,
+	NeedsConfirmation,
+	Navigated,
+};
+
 class Tab {
 	int m_width;
 	int m_height;
@@ -131,7 +140,7 @@ class Tab {
 	StyleSheet m_rules{};
 	std::shared_ptr<DocumentLayout> m_document{};
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list{};
-	std::vector<URL> m_history{};
+	std::vector<HttpRequest> m_history{};
 	size_t m_history_index = -1;
 	ConnectionManager m_connection_manager;
 	int m_scroll = 0;
@@ -251,7 +260,7 @@ public:
 
 		if (alter_history) {
 			m_history.erase(m_history.begin() + m_history_index + 1, m_history.end());
-			m_history.push_back(request.url);
+			m_history.push_back(request);
 			m_history_index++;
 		}
 	}
@@ -375,26 +384,36 @@ public:
 		return m_history_index > 0;
 	}
 
-	bool go_back(FontCache& font_cache) {
+	HistoryNavigationAttempt go_back(FontCache& font_cache, bool force = false) {
 		if (can_go_back()) {
-			m_history_index--;
-			load(m_history[m_history_index], font_cache, false);
-			return true;
+			HttpRequest const& request = m_history[m_history_index - 1];
+			if (request.method == HttpMethod::GET || force) {
+				m_history_index--;
+				load(request, font_cache, false);
+				return HistoryNavigationAttempt::Navigated;
+			} else {
+				return HistoryNavigationAttempt::NeedsConfirmation;
+			}
 		}
-		return false;
+		return HistoryNavigationAttempt::NoNavigation;
 	}
 
 	bool can_go_forward() const {
 		return m_history_index < m_history.size() - 1;
 	}
 
-	bool go_forward(FontCache& font_cache) {
+	HistoryNavigationAttempt go_forward(FontCache& font_cache, bool force = false) {
 		if (can_go_forward()) {
-			m_history_index++;
-			load(m_history[m_history_index], font_cache, false);
-			return true;
+			HttpRequest const& request = m_history[m_history_index + 1];
+			if (request.method == HttpMethod::GET || force) {
+				m_history_index++;
+				load(request, font_cache, false);
+				return HistoryNavigationAttempt::Navigated;
+			} else {
+				return HistoryNavigationAttempt::NeedsConfirmation;
+			}
 		}
-		return false;
+		return HistoryNavigationAttempt::NoNavigation;
 	}
 
 	void clamp_scroll() {
@@ -620,6 +639,77 @@ public:
 	void paint(Browser const& browser, std::vector<std::shared_ptr<DrawCommand>>& commands);
 };
 
+class PopUp {
+	std::shared_ptr<SkFont> m_font;
+	std::vector<std::string> m_prompts;
+	std::vector<std::string> m_options;
+	std::vector<float> m_prompts_widths;
+	std::vector<SkRect> m_options_rects;
+	std::vector<std::function<void(Browser&)>> m_actions;
+	float m_padding;
+	float m_option_padding;
+	float m_top;
+	float m_left;
+	float m_width;
+	float m_height;
+
+	float m_font_height;
+	SkRect m_rect;
+public:
+	PopUp(FontCache& font_cache, int width, std::vector<std::string> prompts, std::vector<std::string> options, std::vector<std::function<void(Browser &)>> actions) {
+		assert(options.size() == actions.size());
+		m_font = font_cache.get_font("times", 16, false, false);
+		SkFontMetrics m;
+		m_font->getMetrics(&m);
+		m_font_height = m.fDescent - m.fAscent;
+		m_prompts = prompts;
+		m_options = options;
+		m_padding = 5;
+		m_option_padding = 20;
+		m_actions = actions;
+
+		std::vector<float> options_widths;
+		auto text_measure = [&](auto t) { return m_font->measureText(t.data(), t.size(), SkTextEncoding::kUTF8); };
+		std::transform(m_prompts.begin(), m_prompts.end(), std::back_inserter(m_prompts_widths), text_measure);
+		std::transform(m_options.begin(), m_options.end(), std::back_inserter(options_widths), text_measure);
+		m_width = std::ranges::max(m_prompts_widths);
+		float options_width = std::reduce(options_widths.begin(), options_widths.end(), 0.0, [](float a, float f) { return a + f; });
+		m_width = std::max(m_width, options_width + (m_options.size() + 1) * m_option_padding);
+		m_width += 2 * m_padding;
+
+		m_top = 0;
+		m_left = (width - m_width) / 2.0;
+		float options_top = (m_prompts.size() + 1) * (m_font_height + m.fLeading) + m_padding;
+		m_height = options_top + m_font_height + m.fLeading + m_padding;
+
+		float options_cursor = m_left;
+		for (size_t i = 0; i < m_options.size(); i++) {
+			options_cursor += m_option_padding;
+			m_options_rects.push_back(SkRect::MakeLTRB(options_cursor, options_top, options_cursor + options_widths[i], options_top + m_font_height));
+			options_cursor += options_widths[i];
+		}
+
+		m_rect = SkRect::MakeLTRB(m_left, m_top, m_left + m_width, m_top + m_height);
+	}
+
+	void click(Browser& browser, float x, float y);
+	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) {
+		commands.push_back(DrawRect::create(m_rect, SK_ColorWHITE));
+		commands.push_back(DrawOutline::create(m_rect, SK_ColorBLACK, 1));
+
+		SkFontMetrics m;
+		m_font->getMetrics(&m);
+		for (size_t i = 0; i < m_prompts.size(); i++) {
+			commands.push_back(DrawText::create(m_left + m_padding, m_top + m_padding + (i * (m_font_height + m.fLeading)), m_prompts_widths[i], m_prompts[i], m_font, SK_ColorBLACK));
+		}
+
+		for (size_t i = 0; i < m_options.size(); i++) {
+			commands.push_back(DrawOutline::create(m_options_rects[i], SK_ColorBLACK, 1));
+			commands.push_back(DrawText::create(m_options_rects[i], m_options[i], m_font, SK_ColorBLACK));
+		}
+	}
+};
+
 enum class ClickType {
 	Left,
 	Middle,
@@ -640,15 +730,18 @@ class Browser {
 	std::vector<std::unique_ptr<Tab>> m_tabs{};
 	size_t m_active_tab{};
 	Chrome m_chrome;
+	std::optional<PopUp> m_popup;
 
 	enum class Focus {
 		Nothing,
+		Alert,
 		Chrome,
 		Content,
 	};
 	Focus m_focus{Focus::Nothing};
 
 	friend class Chrome;
+	friend class Alert;
 
 public:
 	static std::optional<std::unique_ptr<Browser>> create() {
@@ -728,6 +821,14 @@ public:
 			cmd->execute(0, *canvas);
 		}
 
+		if (m_popup) {
+			std::vector<std::shared_ptr<DrawCommand>> popup_draws;
+			m_popup->paint(popup_draws);
+			for (auto const& cmd : popup_draws) {
+				cmd->execute(0, *canvas);
+			}
+		}
+
 		sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
 
 		size_t row_bytes = m_width * 4;
@@ -768,7 +869,9 @@ public:
 	}
 
 	void handle_click(ClickType type, float x, float y) {
-		if (y < m_chrome.m_bottom) {
+		if (m_focus == Focus::Alert) {
+			m_popup->click(*this, x, y);
+		} else if (y < m_chrome.m_bottom) {
 			m_focus = Focus::Chrome;
 			m_tabs[m_active_tab]->blur();
 			m_tabs[m_active_tab]->render(m_font_cache);
@@ -805,6 +908,8 @@ public:
 			scroll_up();
 		} else if (m_focus == Focus::Nothing) {
 			// nothing
+		} else if (m_focus == Focus::Alert) {
+			// todo: add keyboard input here?
 		} else if (m_focus == Focus::Chrome) {
 			if (event.key == SDLK_RETURN) {
 				m_chrome.enter(*this);
@@ -823,6 +928,37 @@ public:
 			assert(false && "unreachable");
 		}
 		draw();
+	}
+
+	void navigation_confirmation_popup(bool going_back) {
+		m_focus = Focus::Alert;
+
+		auto close = [](Browser& b){
+			b.m_focus = Focus::Nothing;
+			b.m_popup = std::nullopt;
+		};
+
+		std::vector<std::string> prompts{}, options{"Cancel"};
+		std::vector<std::function<void(Browser&)>> actions {close};
+		if (going_back) {
+			prompts.push_back("Going back will send data again.");
+			prompts.push_back("Are you sure you want to go back?");
+			options.push_back("Go back");
+			actions.push_back([close](Browser& b){
+				close(b);
+				b.m_tabs[b.m_active_tab]->go_back(b.m_font_cache, true);
+			});
+		} else {
+			prompts.push_back("Going forward will send data again.");
+			prompts.push_back("Are you sure you want to go forward?");
+			options.push_back("Go forward");
+			actions.push_back([close](Browser& b){
+				close(b);
+				b.m_tabs[b.m_active_tab]->go_forward(b.m_font_cache, true);
+			});
+		}
+
+		m_popup = PopUp(m_font_cache, m_width, prompts, options, actions);
 	}
 
 	void destroy() {
@@ -871,15 +1007,29 @@ void Chrome::click(Browser& browser, float x, float y) {
 	if (m_newtab_rect.contains(x, y)) {
 		browser.new_tab(URL::create("https://browser.engineering").value_or(URL::ABOUT_BLANK));
 	} else if (m_back_rect.contains(x, y)) {
-		bool navigated = browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
-		if (navigated) {
+		auto navigated = browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
+		switch (navigated) {
+                case HistoryNavigationAttempt::NoNavigation:
+			break;
+                case HistoryNavigationAttempt::NeedsConfirmation:
+			browser.navigation_confirmation_popup(true);
+			break;
+                case HistoryNavigationAttempt::Navigated:
 			browser.set_window_title();
-		}
+			break;
+                }
 	} else if (m_forward_rect.contains(x, y)) {
-		bool navigated = browser.m_tabs[browser.m_active_tab]->go_forward(browser.m_font_cache);
-		if (navigated) {
+		auto navigated = browser.m_tabs[browser.m_active_tab]->go_forward(browser.m_font_cache);
+		switch (navigated) {
+                case HistoryNavigationAttempt::NoNavigation:
+			break;
+                case HistoryNavigationAttempt::NeedsConfirmation:
+			browser.navigation_confirmation_popup(false);
+			break;
+                case HistoryNavigationAttempt::Navigated:
 			browser.set_window_title();
-		}
+			break;
+                }
 	} else if (m_address_rect.contains(x, y)) {
 		m_focus = Focus::AddressBar;
 		m_address_bar = std::string{};
@@ -938,6 +1088,15 @@ void Chrome::paint(Browser const& browser, std::vector<std::shared_ptr<DrawComma
 		commands.push_back(DrawText::create(m_address_rect.fLeft + m_padding, m_address_rect.fTop, str.str(), m_font, SK_ColorBLACK));
 	}
 }
+
+void PopUp::click(Browser& browser, float x, float y) {
+	for (size_t i = 0; i < m_options_rects.size(); i++) {
+		if (m_options_rects[i].contains(x, y)) {
+			(m_actions[i])(browser);
+		}
+	}
+}
+
 
 int main(int argc, char** argv) {
 

@@ -20,7 +20,9 @@ def add_entry(params):
 
 
 def secret():
-    return '<p>You found me!</p>'
+    out = '<p>You found me!</p>'
+    out += '<a href="/">Back to home</a>'
+    return out
 
 
 def show_comments():
