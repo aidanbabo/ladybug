@@ -4,9 +4,15 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 void network_init();
 std::string url_encode(std::string_view s);
+
+enum class HttpMethod {
+	GET,
+	POST,
+};
 
 struct URL {
 	bool view_source;
@@ -36,6 +42,15 @@ struct std::hash<URL> {
 	std::size_t operator()(const URL& u) const noexcept;
 };
 
+struct HttpRequest {
+	URL url;
+	HttpMethod method;
+	std::optional<std::string> payload;
+
+	HttpRequest(URL url);
+	HttpRequest(URL u, HttpMethod m, std::optional<std::string> p);
+};
+
 class HttpConnection;
 struct HttpResponse;
 struct CachedHttpResponse;
@@ -49,11 +64,11 @@ class ConnectionManager {
 public:
 	ConnectionManager();
 	~ConnectionManager();
-	std::optional<std::string> request(URL url, std::optional<std::string> payload = std::nullopt);
+	std::optional<std::string> request(HttpRequest const& request);
 	void print_active_connections() const;
 private:
 	std::optional<std::string> load_file(URL url) const;
-	std::optional<std::string> load_http_or_from_cache(URL url, std::optional<std::string> payload);
-	std::optional<std::string> try_load_from_cache(URL url);
-	void store_in_cache_if_cachable(URL url, HttpResponse response);
+	std::optional<std::string> load_http_or_from_cache(HttpRequest request);
+	std::optional<std::string> try_load_from_cache(HttpRequest const& request);
+	void store_in_cache_if_cachable(HttpRequest const& request, HttpResponse const& response);
 };

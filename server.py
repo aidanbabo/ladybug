@@ -19,6 +19,10 @@ def add_entry(params):
     return show_comments()
 
 
+def secret():
+    return '<p>You found me!</p>'
+
+
 def show_comments():
     out = '<!doctype html>'
     for entry in ENTRIES:
@@ -28,6 +32,12 @@ def show_comments():
     out += '  <p><input name=guest></p>'
     out += '  <p><button>Sign the book!</button></p>'
     out += '</form>'
+
+    out += '<form action=/ method=get>'
+    out += '  <p><input name=location></p>'
+    out += '  <p><button>Guess the secret location!</button></p>'
+    out += '</form>'
+
     return out
 
 
@@ -38,8 +48,18 @@ def not_found(url, method):
 
 
 def do_request(method, url, headers, body):
+    print(f'{method} {url}')
+    for k, v in headers.items(): print(k, v)
+    if body:
+        print()
+        print(body)
+    print()
+    print()
+
     if method == 'GET' and url == '/':
         return '200 OK', show_comments()
+    elif method == 'GET' and url == '/?location=secret':
+        return '200 OK', secret()
     elif method == 'POST' and url == '/add':
         params = form_decode(body)
         return '200 OK', add_entry(params)

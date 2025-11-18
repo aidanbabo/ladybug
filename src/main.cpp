@@ -107,6 +107,22 @@ static FontType load_fonts(
 	return font;
 }
 
+static std::string url_encode_parameters(std::vector<std::pair<std::string, std::string>> params) {
+	if (params.empty()) {
+		return "";
+	}
+	std::string out{};
+	for (size_t i = 0; i < params.size(); i++) {
+		if (i != 0) {
+			out.push_back('&');
+		}
+		out.append(url_encode(params[i].first));
+		out.push_back('=');
+		out.append(url_encode(params[i].second));
+	}
+	return out;
+}
+
 class Tab {
 	int m_width;
 	int m_height;
@@ -123,9 +139,9 @@ class Tab {
 	std::shared_ptr<Element> m_focus;
 
 public:
-	void load(URL url, std::optional<std::string> payload, FontCache& font_cache, bool alter_history) {
-		if (m_url.equal_disregarding_fragment(url) && !payload /* hack for resubmitting forms */) {
-			if (url.fragment == "") {
+	void load(HttpRequest request, FontCache& font_cache, bool alter_history) {
+		if (request.method == HttpMethod::GET && m_url.equal_disregarding_fragment(request.url)) {
+			if (request.url.fragment == "") {
 				m_scroll = 0;
 			} else {
 				std::vector<std::shared_ptr<LayoutBase>> layouts;
@@ -137,7 +153,7 @@ public:
 						}
 						auto e = static_cast<Element const&>(*n);
 						if (auto id = e.attributes.find("id"); id != e.attributes.end()) {
-							if (id->second == url.fragment) {
+							if (id->second == request.url.fragment) {
 								return true;
 							}
 						}
@@ -154,7 +170,7 @@ public:
 				}
 			}
 		} else {
-			std::optional<std::string> body = m_connection_manager.request(url, payload);
+			std::optional<std::string> body = m_connection_manager.request(request);
 			if (!body) {
 				std::cerr << "Failed to load new document" << std::endl;
 				return;
@@ -197,7 +213,7 @@ public:
 			for (auto const& [access, must_fetch] : styles) {
 				auto body = [&]() -> std::optional<std::string> {
 					if (must_fetch) {
-						auto style_url = url.resolve(access);
+						auto style_url = request.url.resolve(access);
 						if (!style_url) {
 							std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
 							return std::nullopt;
@@ -231,16 +247,16 @@ public:
 			render(font_cache);
 		}
 
-		m_url = url;
+		m_url = request.url;
 
 		if (alter_history) {
 			m_history.erase(m_history.begin() + m_history_index + 1, m_history.end());
-			m_history.push_back(url);
+			m_history.push_back(request.url);
 			m_history_index++;
 		}
 	}
 
-	std::optional<std::pair<URL, std::optional<std::string>>> submit_form(std::shared_ptr<Element> node) {
+	std::optional<HttpRequest> submit_form(std::shared_ptr<Element> node) {
 		auto url = m_url.resolve(node->attributes["action"]);
 		if (!url) {
 			return std::nullopt;
@@ -256,24 +272,41 @@ public:
 			return el->tag != "input" || !el->attributes.contains("name");
 		}), inputs.end());
 
-		std::string body{};
+		std::vector<std::pair<std::string, std::string>> params;
 		for (auto const& node : inputs) {
 			auto input = std::static_pointer_cast<Element>(node);
-			std::string_view name { input->attributes["name"] };
-			std::string_view value;
+			std::string name { input->attributes["name"] };
+			std::string value;
 			auto v = input->attributes.find("value");
 			if (v != input->attributes.end()) {
 				value = v->second;
 			}
-			body.push_back('&');
-			body.append(url_encode(name));
-			body.push_back('=');
-			body.append(url_encode(value));
+			params.push_back({std::move(name), std::move(value)});
 		}
-		if (!body.empty()) {
-			body = body.substr(1);
+
+		HttpMethod method;
+		auto method_iter = node->attributes.find("method");
+		if (method_iter == node->attributes.end()) {
+			method = HttpMethod::GET;
+		} else {
+			std::string m = method_iter->second;
+			std::transform(m.begin(), m.end(), m.begin(), ::tolower);
+			if (m == "get") {
+				method = HttpMethod::GET;
+			} else if (m == "post") {
+				method = HttpMethod::POST;
+			} else {
+				std::cerr << "unknown form method: " << m << std::endl;
+				method = HttpMethod::GET;
+			}
 		}
-		return std::make_pair(*url, body);
+		std::optional<std::string> payload = std::nullopt;
+		if (method == HttpMethod::POST) {
+			payload = url_encode_parameters(params);
+		} else if (method == HttpMethod::GET) {
+			url->path += "?" + url_encode_parameters(params);
+		}
+		return HttpRequest(*url, method, url_encode_parameters(params));
 	}
 
 	void render(FontCache& font_cache) {
@@ -345,7 +378,7 @@ public:
 	bool go_back(FontCache& font_cache) {
 		if (can_go_back()) {
 			m_history_index--;
-			load(m_history[m_history_index], std::nullopt, font_cache, false);
+			load(m_history[m_history_index], font_cache, false);
 			return true;
 		}
 		return false;
@@ -358,7 +391,7 @@ public:
 	bool go_forward(FontCache& font_cache) {
 		if (can_go_forward()) {
 			m_history_index++;
-			load(m_history[m_history_index], std::nullopt, font_cache, false);
+			load(m_history[m_history_index], font_cache, false);
 			return true;
 		}
 		return false;
@@ -388,7 +421,7 @@ public:
 	}
 
 	[[nodiscard]]
-	std::optional<std::pair<URL, std::optional<std::string>>> keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
+	std::optional<HttpRequest> keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
 		if (m_focus != nullptr) {
 			if (event.key >= 0x20 && event.key < 0x7f) {
 				char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
@@ -412,7 +445,7 @@ public:
 	// If there is navigation involved, a value is returned for the browser to navigate to.
 	// todo: I think we're gettingo the point where passing around the font_cache is getting annoying.
 	[[nodiscard]]
-	std::optional<std::pair<URL, std::optional<std::string>>> click(float x, float y, FontCache& font_cache) {
+	std::optional<HttpRequest> click(float x, float y, FontCache& font_cache) {
 		if (m_focus) {
 			m_focus->is_focused = false;
 			m_focus = nullptr;
@@ -446,7 +479,7 @@ public:
 					if (el->tag == "a") {
 						if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
 							if (auto url = m_url.resolve(href->second)) {
-								return std::make_pair(*url, std::nullopt);
+								return *url;
 							}
 						}
 					} else if (el->tag == "input") {
@@ -662,9 +695,9 @@ public:
 		return std::make_unique<Browser>(width, height, window, renderer, texture, root_surface, info, font_mgr, font_cache);
 	}
 
-	void new_tab(URL url, std::optional<std::string> payload = std::nullopt) {
+	void new_tab(HttpRequest request) {
 		auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom);
-		new_tab->load(url, payload, m_font_cache, true);
+		new_tab->load(request, m_font_cache, true);
 		m_tabs.push_back(std::move(new_tab));
 		set_active_tab(m_tabs.size() - 1);
 		draw();
@@ -749,11 +782,10 @@ public:
 				float tab_y = y - m_chrome.m_bottom;
 				auto request = m_tabs[m_active_tab]->click(x, tab_y, m_font_cache);
 				if (request) {
-					auto [url, payload] = *request;
 					if (type == ClickType::Left) {
-						m_tabs[m_active_tab]->load(url, payload, m_font_cache, true);
+						m_tabs[m_active_tab]->load(*request, m_font_cache, true);
 					} else {
-						new_tab(url, payload);
+						new_tab(*request);
 					}
 					set_window_title();
 				}
@@ -785,8 +817,7 @@ public:
 		} else if (m_focus == Focus::Content) {
 			auto navigation = m_tabs[m_active_tab]->keypress(event, m_font_cache);
 			if (navigation) {
-				auto [url, payload] = *navigation;
-				m_tabs[m_active_tab]->load(url, payload, m_font_cache, true);
+				m_tabs[m_active_tab]->load(*navigation, m_font_cache, true);
 			}
 		} else {
 			assert(false && "unreachable");
@@ -827,7 +858,7 @@ public:
 void Chrome::enter(Browser& browser) {
 	if (m_focus == Focus::AddressBar) {
 		if (auto url = URL::create(m_address_bar)) {
-			browser.m_tabs[browser.m_active_tab]->load(*url, std::nullopt, browser.m_font_cache, true);
+			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache, true);
 			m_focus = Focus::Nothing;
 			browser.set_window_title();
 		}

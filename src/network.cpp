@@ -303,6 +303,18 @@ std::size_t std::hash<URL>::operator()(const URL& u) const noexcept {
 	return seed;
 }
 
+HttpRequest::HttpRequest(URL url)
+	: url(url)
+	, method(HttpMethod::GET)
+	, payload(std::nullopt)
+{}
+
+HttpRequest::HttpRequest(URL u, HttpMethod m, std::optional<std::string> p)
+	: url(u)
+	, method(m)
+	, payload(p)
+{}
+
 struct HttpResponse {
 	int status;
 	std::string version;
@@ -429,30 +441,38 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	std::optional<HttpResponse> request(URL url, std::optional<std::string> payload) {
-		std::string method { payload ? "POST" : "GET" };
-		std::string request = method + " " + url.path + " HTTP/1.1\r\n";
+	std::optional<HttpResponse> request(HttpRequest const& request) {
+		std::string body{};
+		if (request.method == HttpMethod::GET) {
+			body += "GET " + request.url.path + " HTTP/1.1\r\n";;
+		} else if (request.method == HttpMethod::POST) {
+			body += "POST " + request.url.path + " HTTP/1.1\r\n";;
+		} else {
+			assert(false && "unreachable");
+		}
 
 		std::vector<std::pair<std::string_view, std::string_view>> request_headers;
-		request_headers.push_back(std::make_pair("Host", std::string_view{url.host}));
+		request_headers.push_back(std::make_pair("Host", std::string_view{request.url.host}));
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip, deflate"));
-		if (payload) {
-			request_headers.push_back(std::make_pair("Content-Length", std::to_string(payload->size())));
+
+		if (request.method == HttpMethod::POST) {
+			assert(request.payload != std::nullopt);
+			request_headers.push_back(std::make_pair("Content-Length", std::to_string(request.payload->size())));
 		}
 		for (auto const& pair : request_headers) {
-			request.append(pair.first);
-			request.append(": ");
-			request.append(pair.second);
-			request.append("\r\n");
+			body.append(pair.first);
+			body.append(": ");
+			body.append(pair.second);
+			body.append("\r\n");
 		}
-		request.append("\r\n");
-		if (payload) {
-			request.append(*payload);
+		body.append("\r\n");
+		if (request.payload) {
+			body.append(*request.payload);
 		}
 
-		if (!write(request)) {
+		if (!write(body)) {
 			std::cerr << "Writing request failed" << std::endl;
 			return std::nullopt;
 		}
@@ -771,16 +791,16 @@ struct CachedHttpResponse {
 ConnectionManager::ConnectionManager() = default;
 ConnectionManager::~ConnectionManager() = default;
 
-std::optional<std::string> ConnectionManager::request(URL url, std::optional<std::string> payload) {
+std::optional<std::string> ConnectionManager::request(HttpRequest const& request) {
 	std::optional<std::string> response;
-	if (url.scheme == "file") {
-		response = load_file(url);
-	} else if (url.scheme == "data") {
-		response = url.path;
-	} else if (url.scheme == "http" || url.scheme == "https") {
-		response = load_http_or_from_cache(url, payload);
-	} else if (url.scheme == "about") {
-		if (url.host == "blank") {
+	if (request.url.scheme == "file") {
+		response = load_file(request.url);
+	} else if (request.url.scheme == "data") {
+		response = request.url.path;
+	} else if (request.url.scheme == "http" || request.url.scheme == "https") {
+		response = load_http_or_from_cache(request);
+	} else if (request.url.scheme == "about") {
+		if (request.url.host == "blank") {
 			response = "";
 		} else {
 			std::cerr << "Unsupported about url" << std::endl;
@@ -789,7 +809,7 @@ std::optional<std::string> ConnectionManager::request(URL url, std::optional<std
 		assert(false && "unreachable");
 	}
 
-	if (url.view_source && response) {
+	if (request.url.view_source && response) {
 		return escape(*response);
 	} else {
 		return response;
@@ -806,8 +826,12 @@ std::optional<std::string> ConnectionManager::load_file(URL url) const {
 	return read_entire_file_to_string(url.path);
 }
 
-std::optional<std::string> ConnectionManager::try_load_from_cache(URL url) {
-	URL cachable_url = url.cachable_subsection();
+std::optional<std::string> ConnectionManager::try_load_from_cache(HttpRequest const& request) {
+	if (request.method != HttpMethod::GET) {
+		return std::nullopt;
+	}
+
+	URL cachable_url = request.url.cachable_subsection();
 	if (auto cached = m_cached_responses.find(cachable_url); cached != m_cached_responses.end()) {
 		if (auto expires_at = cached->second->expires_at; expires_at && std::time(nullptr) >= *expires_at) {
 			m_cached_responses.erase(cached);
@@ -819,7 +843,10 @@ std::optional<std::string> ConnectionManager::try_load_from_cache(URL url) {
 	return std::nullopt;
 }
 
-static std::pair<bool, std::optional<std::time_t>> response_is_cachable(HttpResponse const& response) {
+static std::pair<bool, std::optional<std::time_t>> response_is_cachable(HttpRequest const& request, HttpResponse const& response) {
+	if (request.method != HttpMethod::GET) {
+		return { false, std::nullopt };
+	}
 	// todo: add 301, 404, etc.
 	if (response.status != 200) {
 		return { false, std::nullopt };
@@ -863,13 +890,13 @@ static std::pair<bool, std::optional<std::time_t>> response_is_cachable(HttpResp
 
 }
 
-void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse response) {
-	auto [is_cachable, expires_at] = response_is_cachable(response);
+void ConnectionManager::store_in_cache_if_cachable(HttpRequest const& request, HttpResponse const& response) {
+	auto [is_cachable, expires_at] = response_is_cachable(request, response);
 	if (!is_cachable) {
 		return;
 	}
 
-	URL cachable_url = url.cachable_subsection();
+	URL cachable_url = request.url.cachable_subsection();
 	auto cachable_response = std::make_unique<CachedHttpResponse>(CachedHttpResponse {
 		.response = response,
 		.expires_at = expires_at,
@@ -877,39 +904,39 @@ void ConnectionManager::store_in_cache_if_cachable(URL url, HttpResponse respons
 	m_cached_responses.insert({cachable_url, std::move(cachable_response)});
 }
 
-std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url, std::optional<std::string> payload) {
+std::optional<std::string> ConnectionManager::load_http_or_from_cache(HttpRequest request) {
 	// Redirect loop.
 	for (int i = 0; i < 10; i++) {
-		if (auto content = try_load_from_cache(url)) {
+		if (auto content = try_load_from_cache(request)) {
 			return *content;
 		}
 
-		URL reusable_base = url.reusable_connection_subsection();
+		URL reusable_base = request.url.reusable_connection_subsection();
 		auto pair = m_active_connections.find(reusable_base);
 
 		// I wish if statements were expressions so bad
 		auto connection = [&]() -> HttpConnection* {
 			if (pair == m_active_connections.end()) {
-				std::cerr << "Creating new connection for " << reusable_base << " (" << url << ")" << std::endl;
+				std::cerr << "Creating new connection for " << reusable_base << " (" << request.url << ")" << std::endl;
 				bool encrypted;
-				if (url.scheme == "http") {
+				if (request.url.scheme == "http") {
 					encrypted = false;
-				} else if (url.scheme == "https") {
+				} else if (request.url.scheme == "https") {
 					encrypted = true;
 				} else {
 					assert(false);
 				}
-				auto connection { HttpConnection::create(url.host.c_str(), url.port, encrypted) };
+				auto connection { HttpConnection::create(request.url.host.c_str(), request.url.port, encrypted) };
 				if (connection) {
 					m_active_connections.insert({reusable_base, std::move(*connection)});
 					HttpConnection *conn = m_active_connections[reusable_base].get();
 					return conn;
 				} else {
-					std::cerr << "Connection to " << url << " failed" << std::endl;
+					std::cerr << "Connection to " << request.url << " failed" << std::endl;
 					return nullptr;
 				}
 			} else {
-				std::cerr << "Reusing connection for " << reusable_base << " (" << url << ")" << std::endl;
+				std::cerr << "Reusing connection for " << reusable_base << " (" << request.url << ")" << std::endl;
 				return pair->second.get();
 			}
 		}();
@@ -917,34 +944,34 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(URL url, s
 			return std::nullopt;
 		}
 
-		auto response = connection->request(url, payload);
+		auto response = connection->request(request);
 		if (!response) {
 			return std::nullopt;
 		}
-		std::cerr << response->status << " to " << url << std::endl;
+		std::cerr << response->status << " to " << request.url << std::endl;
 		if (auto conn = response->headers.find("connection"); conn != response->headers.end() && conn->second == "keep-alive") {
 			// save to keep alive
 		} else {
 			m_active_connections.erase(reusable_base);
 		}
 
-		// todo: this is a hack to prevent caching POST requests
-		if (!payload) {
-			store_in_cache_if_cachable(url, *response);
-		}
+		store_in_cache_if_cachable(request, *response);
 
 		if (response->status >= 300 && response->status < 400) {
 			if (auto location_iter = response->headers.find("location"); location_iter != response->headers.end()) {
 				auto location = location_iter->second;
+				// todo: What to do about query parameters?
+				// Should we add a field in the URL for them so they can be retained while the path changes?
+				// What is actual correct redirect behavior?
 				if (location.starts_with('/')) {
-					url.path = location;
+					request.url.path = location;
 				} else {
-					url = URL::create(location).value_or(URL::ABOUT_BLANK);
+					request.url = URL::create(location).value_or(URL::ABOUT_BLANK);
 				}
-				std::cerr << "Redirected to " << url << std::endl;
+				std::cerr << "Redirected to " << request.url << std::endl;
 				continue;
 			} else {
-				std::cerr << "No `Location` header in redirect response " << url << std::endl;
+				std::cerr << "No `Location` header in redirect response " << request.url << std::endl;
 				return std::nullopt;
 			}
 		}
