@@ -14,7 +14,8 @@ def form_decode(body):
 
 
 def add_entry(params):
-    if 'guest' in params:
+    # must server side validate
+    if 'guest' in params and len(params['guest']) <= 100:
         ENTRIES.append(params['guest'])
     return show_comments()
 
@@ -27,6 +28,7 @@ def secret():
 
 def show_comments():
     out = '<!doctype html>'
+    out += '<link rel=stylesheet href=comment.css>'
     for entry in ENTRIES:
         out += '<p>' + entry + '</p>'
 
@@ -34,6 +36,8 @@ def show_comments():
     out += '  <p><input name=guest></p>'
     out += '  <p><button>Sign the book!</button></p>'
     out += '</form>'
+    out += '<strong></strong>'
+    out += '<script src=/comment.js></script>'
 
     out += '<form action=/ method=get>'
     out += '  <p><input name=location></p>'
@@ -60,6 +64,12 @@ def do_request(method, url, headers, body):
 
     if method == 'GET' and url == '/':
         return '200 OK', show_comments()
+    elif method == 'GET' and url == '/comment.js':
+        with open('comments.js') as f:
+            return '200 OK', f.read()
+    elif method == 'GET' and url == '/comment.css':
+        with open('comments.css') as f:
+            return '200 OK', f.read()
     elif method == 'GET' and url == '/?location=secret':
         return '200 OK', secret()
     elif method == 'POST' and url == '/add':

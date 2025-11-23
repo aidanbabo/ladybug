@@ -51,6 +51,7 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 	static const std::unordered_map<std::string_view, SkColor> COLOR_NAMES = {
 		{ "white", SK_ColorWHITE },
 		{ "black", SK_ColorBLACK },
+		{ "red", SK_ColorRED },
 		{ "blue", SK_ColorBLUE },
 		{ "gray", SK_ColorGRAY },
 		{ "grey", SK_ColorGRAY },
@@ -563,7 +564,7 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 		}
 		if (element.tag == "p") {
 			// todo: move to css? margin bottom?
-			//new_line(node);
+			new_line(node);
 			//m_cursor_y += VSTEP;
 		}
 	} else {

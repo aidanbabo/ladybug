@@ -195,8 +195,8 @@ std::optional<URL> URL::create(std::string_view string) {
 URL URL::ABOUT_BLANK = *URL::create("about:blank");
 
 std::optional<URL> URL::resolve(std::string_view url_) const {
-	if (url_.find("://") != std::string::npos) {
-		// url is abosolute
+	if (url_.find("://") != std::string::npos || url_.find("file:.") != std::string::npos) {
+		// url is abosolute or relative file
 		return URL::create(url_);
 	}
 	std::string url { url_ };
@@ -224,7 +224,15 @@ std::optional<URL> URL::resolve(std::string_view url_) const {
 	if (url.starts_with("//")) {
 		return URL::create(scheme + "://" + url);
 	} else {
-		return URL::create(scheme + "://" + host + ":" + std::to_string(port) + url);
+		URL out = *this;
+		size_t n = url.find('#');
+		if (n != std::string::npos) {
+			out.fragment = url.substr(n + 1);
+			out.path = url.substr(0, n);
+		} else {
+			out.path = url;
+		}
+		return out;
 	}
 }
 

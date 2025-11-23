@@ -11,6 +11,7 @@
 #include "network.hpp"
 #include "parsers.hpp"
 #include "layout.hpp"
+#include "jscontext.hpp"
 
 int const INITIAL_WIDTH  = 800;
 int const INITIAL_HEIGHT = 600;
@@ -36,13 +37,17 @@ class Tab {
 	int m_scroll = 0;
 	URL m_url = URL::ABOUT_BLANK;
 	std::shared_ptr<Element> m_focus;
+	std::optional<JSContext> m_js;
+	FontCache& m_font_cache;
+
+	friend class JSContext;
 
 public:
-	void load(HttpRequest request, FontCache& font_cache, bool alter_history);
+	void load(HttpRequest request, bool alter_history);
 
 	std::optional<HttpRequest> submit_form(std::shared_ptr<Element> node);
 
-	void render(FontCache& font_cache);
+	void render();
 	
 	void draw(SkCanvas *canvas, float offset);
 
@@ -54,11 +59,11 @@ public:
 
 	bool can_go_back() const;
 
-	HistoryNavigationAttempt go_back(FontCache& font_cache, bool force = false);
+	HistoryNavigationAttempt go_back(bool force = false);
 
 	bool can_go_forward() const;
 
-	HistoryNavigationAttempt go_forward(FontCache& font_cache, bool force = false);
+	HistoryNavigationAttempt go_forward(bool force = false);
 
 	void clamp_scroll();
 
@@ -67,16 +72,14 @@ public:
 	void scroll_down();
 
 	[[nodiscard]]
-	std::optional<HttpRequest> keypress(SDL_KeyboardEvent event, FontCache& font_cache);
+	std::optional<HttpRequest> keypress(SDL_KeyboardEvent event);
 
-	// If there is navigation involved, a value is returned for the browser to navigate to.
-	// todo: I think we're gettingo the point where passing around the font_cache is getting annoying.
 	[[nodiscard]]
-	std::optional<HttpRequest> click(float x, float y, FontCache& font_cache);
+	std::optional<HttpRequest> click(float x, float y);
 
-	void resize(int new_width, int new_height, FontCache& font_cache);
+	void resize(int new_width, int new_height);
 
-	Tab(int width, int height);
+	Tab(int width, int height, FontCache& font_cache);
 };
 
 class Browser;

@@ -19,6 +19,7 @@ add_executable(ladybug
 	src/draw.cpp
 	src/font_cache.cpp
 	src/ui.cpp
+	src/jscontext.cpp
 )
 
 target_link_libraries(ladybug PRIVATE z ssl crypto)

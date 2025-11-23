@@ -6,6 +6,8 @@
 #include "include/core/SkRect.h"
 #include "include/core/SkSurface.h"
 
+#include <duktape.h>
+
 #include <cassert>
 #include <functional>
 #include <iostream>
@@ -15,7 +17,6 @@
 #include "layout.hpp"
 #include "draw.hpp"
 #include "utils.hpp"
-
 
 #include "ui.hpp"
 
@@ -71,7 +72,7 @@ static std::string url_encode_parameters(std::vector<std::pair<std::string, std:
 }
 
 
-void Tab::load(HttpRequest request, FontCache& font_cache, bool alter_history) {
+void Tab::load(HttpRequest request, bool alter_history) {
 	if (request.method == HttpMethod::GET && m_url.equal_disregarding_fragment(request.url)) {
 		if (request.url.fragment == "") {
 			m_scroll = 0;
@@ -143,24 +144,23 @@ void Tab::load(HttpRequest request, FontCache& font_cache, bool alter_history) {
 		}
 
 		for (auto const& [access, must_fetch] : styles) {
-			auto body = [&]() -> std::optional<std::string> {
-				if (must_fetch) {
-					auto style_url = request.url.resolve(access);
-					if (!style_url) {
-						std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
-						return std::nullopt;
-					}
-
-					auto body = m_connection_manager.request(*style_url);
-					return body;
-				} else {
-					return access;
+			std::string body;
+			if (must_fetch) {
+				auto style_url = request.url.resolve(access);
+				if (!style_url) {
+					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
+					continue;
 				}
-			}();
-			if (!body) {
-				continue;
+				auto maybe_body = m_connection_manager.request(*style_url);
+				if (!maybe_body) {
+					std::cerr << "Error fetching stylesheet at: '" << access << "'" << std::endl;
+					continue;
+				}
+				body = *maybe_body;
+			} else {
+				body = access;
 			}
-			auto sh = CSSParser(*body).parse();
+			auto sh = CSSParser(body).parse();
 			if (!sh) {
 				if (must_fetch) {
 					std::cerr << "Improper stylesheet at: '" << access << "'" << std::endl;
@@ -176,7 +176,43 @@ void Tab::load(HttpRequest request, FontCache& font_cache, bool alter_history) {
 		std::ranges::stable_sort(m_rules.rules, {}, [](auto p) {
 			return p.first->priority;
 		});
-		render(font_cache);
+
+		std::vector<std::string> scripts;
+		for (auto const& node : nodes) {
+			if (node->type != NodeType::Element) {
+				continue;
+			}
+
+			auto element = static_cast<Element const&>(*node);
+			if (element.tag != "script") {
+				continue;
+			}
+			if (auto f = element.attributes.find("src"); f != element.attributes.end()) {
+				scripts.push_back(f->second);
+			}
+		}
+
+		if (m_js.has_value()) {
+			m_js.reset();
+		}
+		m_js.emplace(*this);
+		for (auto const& access : scripts) {
+			auto script_url = request.url.resolve(access);
+			if (!script_url) {
+				std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
+				continue;
+			}
+			auto code = m_connection_manager.request(*script_url);
+			if (!code) {
+				std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
+				continue;
+			}
+			if (!m_js->run(*code)) {
+				std::cerr << "Script " << *script_url << " crashed" << std::endl;;
+			}
+		}
+
+		render();
 	}
 
 	m_url = request.url;
@@ -189,6 +225,7 @@ void Tab::load(HttpRequest request, FontCache& font_cache, bool alter_history) {
 }
 
 std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
+	if (m_js->dispatch_event("submit", node)) return std::nullopt;
 	auto url = m_url.resolve(node->attributes["action"]);
 	if (!url) {
 		return std::nullopt;
@@ -241,11 +278,11 @@ std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
 	return HttpRequest(*url, method, url_encode_parameters(params));
 }
 
-void Tab::render(FontCache& font_cache) {
+void Tab::render() {
 	m_nodes->style(m_rules);
 	//print_node(*m_nodes);
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-	m_document->layout(font_cache);
+	m_document->layout(m_font_cache);
 	//m_document->print_layout();
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
@@ -307,12 +344,12 @@ bool Tab::can_go_back() const {
 	return m_history_index > 0;
 }
 
-HistoryNavigationAttempt Tab::go_back(FontCache& font_cache, bool force) {
+HistoryNavigationAttempt Tab::go_back(bool force) {
 	if (can_go_back()) {
 		HttpRequest const& request = m_history[m_history_index - 1];
 		if (request.method == HttpMethod::GET || force) {
 			m_history_index--;
-			load(request, font_cache, false);
+			load(request, false);
 			return HistoryNavigationAttempt::Navigated;
 		} else {
 			return HistoryNavigationAttempt::NeedsConfirmation;
@@ -325,12 +362,12 @@ bool Tab::can_go_forward() const {
 	return m_history_index < m_history.size() - 1;
 }
 
-HistoryNavigationAttempt Tab::go_forward(FontCache& font_cache, bool force) {
+HistoryNavigationAttempt Tab::go_forward(bool force) {
 	if (can_go_forward()) {
 		HttpRequest const& request = m_history[m_history_index + 1];
 		if (request.method == HttpMethod::GET || force) {
 			m_history_index++;
-			load(request, font_cache, false);
+			load(request, false);
 			return HistoryNavigationAttempt::Navigated;
 		} else {
 			return HistoryNavigationAttempt::NeedsConfirmation;
@@ -363,12 +400,13 @@ void Tab::scroll_down() {
 }
 
 [[nodiscard]]
-std::optional<HttpRequest> Tab::keypress(SDL_KeyboardEvent event, FontCache& font_cache) {
+std::optional<HttpRequest> Tab::keypress(SDL_KeyboardEvent event) {
 	if (m_focus != nullptr) {
+		if (m_js->dispatch_event("keydown", m_focus)) return std::nullopt;
 		if (event.key >= 0x20 && event.key < 0x7f) {
 			char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
 			m_focus->attributes["value"].push_back(c);
-			render(font_cache);
+			render();
 		} else if (event.key == SDLK_RETURN) {
 			auto el = m_focus;
 			while (el != nullptr) {
@@ -384,10 +422,8 @@ std::optional<HttpRequest> Tab::keypress(SDL_KeyboardEvent event, FontCache& fon
 	return std::nullopt;
 }
 
-// If there is navigation involved, a value is returned for the browser to navigate to.
-// todo: I think we're gettingo the point where passing around the font_cache is getting annoying.
 [[nodiscard]]
-std::optional<HttpRequest> Tab::click(float x, float y, FontCache& font_cache) {
+std::optional<HttpRequest> Tab::click(float x, float y) {
 	if (m_focus) {
 		m_focus->is_focused = false;
 		m_focus = nullptr;
@@ -420,17 +456,20 @@ std::optional<HttpRequest> Tab::click(float x, float y, FontCache& font_cache) {
 				auto el = std::static_pointer_cast<Element>(elt);
 				if (el->tag == "a") {
 					if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
+						if (m_js->dispatch_event("click", el)) return std::nullopt;
 						if (auto url = m_url.resolve(href->second)) {
 							return *url;
 						}
 					}
 				} else if (el->tag == "input") {
+					if (m_js->dispatch_event("click", el)) return std::nullopt;
 					el->attributes["value"] = "";
 					m_focus = el;
 					el->is_focused = true;
-					render(font_cache);
+					render();
 					return std::nullopt;
 				} else if (el->tag == "button") {
+					if (m_js->dispatch_event("click", el)) return std::nullopt;
 					while (el != nullptr) {
 						if (el->tag == "form" && el->attributes.contains("action")) {
 							return submit_form(el);
@@ -443,32 +482,33 @@ std::optional<HttpRequest> Tab::click(float x, float y, FontCache& font_cache) {
 			}
 			elt = elt->parent.lock();
 		}
-		render(font_cache);
+		render();
 	}
 	return std::nullopt;
 }
 
-void Tab::resize(int new_width, int new_height, FontCache& font_cache) {
+void Tab::resize(int new_width, int new_height) {
 	m_width = new_width;
 	m_height = new_height;
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-	m_document->layout(font_cache);
+	m_document->layout(m_font_cache);
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
 	clamp_scroll();
 
 }
 
-Tab::Tab(int width, int height)
+Tab::Tab(int width, int height, FontCache& font_cache)
 	: m_width(width)
 	, m_height(height)
 	, m_default_style_sheet()
 	, m_document()
 	, m_display_list()
 	, m_connection_manager()
+	, m_font_cache(font_cache)
 {
 	StyleSheet default_style_sheet{};
-	if (auto css_string = read_entire_file_to_string("styles/browser.css")) {
+	if (auto css_string = read_entire_file_to_string("runtime_support/browser.css")) {
 		std::optional<StyleSheet> default_css { CSSParser(*css_string).parse() };
 		assert(default_css.has_value() && "invalid browser.css");
 		m_default_style_sheet = *default_css;
@@ -527,7 +567,7 @@ void Chrome::blur() {
 void Chrome::enter(Browser& browser) {
 	if (m_focus == Focus::AddressBar) {
 		if (auto url = URL::create(m_address_bar)) {
-			browser.m_tabs[browser.m_active_tab]->load(*url, browser.m_font_cache, true);
+			browser.m_tabs[browser.m_active_tab]->load(*url, true);
 			m_focus = Focus::Nothing;
 			browser.set_window_title();
 		}
@@ -540,7 +580,7 @@ void Chrome::click(Browser& browser, float x, float y) {
 	if (m_newtab_rect.contains(x, y)) {
 		browser.new_tab(URL::create("https://browser.engineering").value_or(URL::ABOUT_BLANK));
 	} else if (m_back_rect.contains(x, y)) {
-		auto navigated = browser.m_tabs[browser.m_active_tab]->go_back(browser.m_font_cache);
+		auto navigated = browser.m_tabs[browser.m_active_tab]->go_back();
 		switch (navigated) {
                 case HistoryNavigationAttempt::NoNavigation:
 			break;
@@ -552,7 +592,7 @@ void Chrome::click(Browser& browser, float x, float y) {
 			break;
                 }
 	} else if (m_forward_rect.contains(x, y)) {
-		auto navigated = browser.m_tabs[browser.m_active_tab]->go_forward(browser.m_font_cache);
+		auto navigated = browser.m_tabs[browser.m_active_tab]->go_forward();
 		switch (navigated) {
                 case HistoryNavigationAttempt::NoNavigation:
 			break;
@@ -728,8 +768,8 @@ std::optional<std::unique_ptr<Browser>> Browser::create() {
 }
 
 void Browser::new_tab(HttpRequest request) {
-	auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom);
-	new_tab->load(request, m_font_cache, true);
+	auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom, m_font_cache);
+	new_tab->load(request, true);
 	m_tabs.push_back(std::move(new_tab));
 	set_active_tab(m_tabs.size() - 1);
 	draw();
@@ -792,7 +832,7 @@ void Browser::resize(int new_width, int new_height) {
 	initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
 
 	for (auto& tab : m_tabs) {
-		tab->resize(new_width, new_height, m_font_cache);
+		tab->resize(new_width, new_height);
 	}
 	draw();
 }
@@ -813,7 +853,7 @@ void Browser::handle_click(ClickType type, float x, float y) {
 	} else if (y < m_chrome.m_bottom) {
 		m_focus = Focus::Chrome;
 		m_tabs[m_active_tab]->blur();
-		m_tabs[m_active_tab]->render(m_font_cache);
+		m_tabs[m_active_tab]->render();
 		if (type == ClickType::Left) {
 			m_chrome.click(*this, x, y);
 		}
@@ -822,10 +862,10 @@ void Browser::handle_click(ClickType type, float x, float y) {
 		m_chrome.blur();
 		if (type != ClickType::Right) {
 			float tab_y = y - m_chrome.m_bottom;
-			auto request = m_tabs[m_active_tab]->click(x, tab_y, m_font_cache);
+			auto request = m_tabs[m_active_tab]->click(x, tab_y);
 			if (request) {
 				if (type == ClickType::Left) {
-					m_tabs[m_active_tab]->load(*request, m_font_cache, true);
+					m_tabs[m_active_tab]->load(*request, true);
 				} else {
 					new_tab(*request);
 				}
@@ -859,9 +899,9 @@ void Browser::handle_key(SDL_KeyboardEvent event) {
 			m_chrome.keypress(c);
 		}
 	} else if (m_focus == Focus::Content) {
-		auto navigation = m_tabs[m_active_tab]->keypress(event, m_font_cache);
+		auto navigation = m_tabs[m_active_tab]->keypress(event);
 		if (navigation) {
-			m_tabs[m_active_tab]->load(*navigation, m_font_cache, true);
+			m_tabs[m_active_tab]->load(*navigation, true);
 		}
 	} else {
 		assert(false && "unreachable");
@@ -885,7 +925,7 @@ void Browser::navigation_confirmation_popup(bool going_back) {
 		options.push_back("Go back");
 		actions.push_back([close](Browser& b){
 			close(b);
-			b.m_tabs[b.m_active_tab]->go_back(b.m_font_cache, true);
+			b.m_tabs[b.m_active_tab]->go_back(true);
 		});
 	} else {
 		prompts.push_back("Going forward will send data again.");
@@ -893,7 +933,7 @@ void Browser::navigation_confirmation_popup(bool going_back) {
 		options.push_back("Go forward");
 		actions.push_back([close](Browser& b){
 			close(b);
-			b.m_tabs[b.m_active_tab]->go_forward(b.m_font_cache, true);
+			b.m_tabs[b.m_active_tab]->go_forward(true);
 		});
 	}
 
