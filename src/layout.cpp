@@ -14,6 +14,8 @@
 #include <ranges>
 
 constexpr float INPUT_WIDTH_PX = 200;
+constexpr std::array TEXT_LIKE_ELEMENTS = { "a", "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
+constexpr float LI_BULLET_SPACING = 3 * HSTEP;
 
 static std::optional<SkColor> parse_hex_color(std::string_view hex) {
 	bool is_short = hex.size() == 3 || hex.size() == 4;
@@ -77,10 +79,6 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 	return std::nullopt;
 }
 
-
-constexpr std::array TEXT_LIKE_ELEMENTS = { "a", "i", "b", "strong", "em", "small", "sub", "sup", "ins", "del", "mark" };
-constexpr float LI_BULLET_SPACING = 3 * HSTEP;
-
 static std::optional<float> parse_pixels(std::string_view s) {
 	if (!s.ends_with("px")) {
 		return std::nullopt;
@@ -92,6 +90,34 @@ static std::optional<float> parse_pixels(std::string_view s) {
 	return pixels;
 }
 
+static FontInfo font_info_from_node(Node const& node) {
+	bool is_bold = false;
+	if (node.styles.find("font-weight")->second == "bold") {
+		is_bold = true;
+	}
+
+	bool is_italic = false;
+	if (node.styles.find("font-style")->second == "italic") {
+		is_italic = true;
+	}
+
+	std::string_view font_family { node.styles.find("font-family")->second };
+
+	std::string_view size_str { node.styles.find("font-size")->second };
+	size_t size = 16;
+	if (auto s = parse_pixels(size_str)) {
+		size = *s;
+	}
+	// why do we do this? map between px and Tk screen space?
+	size = static_cast<float>(size) * 0.75;
+
+	return FontInfo {
+		.name = font_family,
+		.size = size,
+		.bold = is_bold,
+		.italic = is_italic,
+	};
+}
 
 LayoutBase::LayoutBase(std::weak_ptr<LayoutBase> parent)
 	: m_parent(parent)
@@ -153,23 +179,8 @@ InputLayout::InputLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase>
 {}
 
 void InputLayout::layout(FontCache& font_cache) {
-	bool is_bold = false;
-	if (m_node->styles.find("font-weight")->second == "bold") {
-		is_bold = true;
-	}
-
-	bool is_italic = false;
-	if (m_node->styles.find("font-style")->second == "italic") {
-		is_italic = true;
-	}
-
-	std::string_view font_family { m_node->styles.find("font-family")->second };
-	std::string_view size_str { m_node->styles.find("font-size")->second };
-	// todo: no alloc, no exception, add someting like this to utils?
-	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
-	size = static_cast<float>(size) * 0.75;
-
-	m_font = font_cache.get_font(font_family, size, is_bold, is_italic);
+	FontInfo info = font_info_from_node(*m_node);
+	m_font = font_cache.get_font(info);
 
 	m_width = INPUT_WIDTH_PX;
 	if (auto prev = m_previous.lock()) {
@@ -238,23 +249,8 @@ TextLayout::TextLayout(std::shared_ptr<Node> node, std::string word, std::shared
 {}
 
 void TextLayout::layout(FontCache& font_cache) {
-	bool is_bold = false;
-	if (m_node->styles.find("font-weight")->second == "bold") {
-		is_bold = true;
-	}
-
-	bool is_italic = false;
-	if (m_node->styles.find("font-style")->second == "italic") {
-		is_italic = true;
-	}
-
-	std::string_view font_family { m_node->styles.find("font-family")->second };
-	std::string_view size_str { m_node->styles.find("font-size")->second };
-	// todo: no alloc, no exception, add someting like this to utils?
-	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
-	size = static_cast<float>(size) * 0.75;
-
-	m_font = font_cache.get_font(font_family, size, is_bold, is_italic);
+	FontInfo info = font_info_from_node(*m_node);
+	m_font = font_cache.get_font(info);
 
 	m_width = m_font->measureText(m_word.data(), m_word.size(), SkTextEncoding::kUTF8);
 	if (auto prev = m_previous.lock()) {
@@ -366,11 +362,6 @@ BlockLayout::BlockLayout(std::vector<std::shared_ptr<Node>> nodes, std::shared_p
 LayoutMode BlockLayout::layout_mode() const {
 	if (std::ranges::all_of(m_nodes, [](std::shared_ptr<Node> n) { return n->type == NodeType::Text; })) {
 		return LayoutMode::Inline;
-	// todo: we may have solved this problem already
-	// edit: i think we did!
-	// } else if (std::ranges::any_of(m_nodes, [](auto n) { return !n->children.empty() || (n->type == NodeType::Element && static_cast<Element const&>(*n).tag == "input"); })) {
-		// any child has kids or is an input element
-		// return LayoutMode::Inline;
 	}
 	for (auto const& node : m_nodes) {
 		for (auto const& child : node->children) {
@@ -414,10 +405,15 @@ void BlockLayout::layout(FontCache& font_cache) {
 		}
 	}
 	if (m_nodes[0]->type == NodeType::Element) {
-		if (auto element = static_cast<Element const&>(*m_nodes[0]); element.tag == "li") {
+		auto element = static_cast<Element const&>(*m_nodes[0]);
+		if (element.tag == "li") {
 			assert(m_nodes.size() == 1 && "layout isn't shared between li");
 			m_x += LI_BULLET_SPACING;
 			m_width -= LI_BULLET_SPACING;
+		}
+		if (element.tag == "script" || element.tag == "style") {
+			m_height = 0;
+			return;
 		}
 	}
 	if (auto previous = m_previous.lock()) {
@@ -526,24 +522,11 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 
 void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 	if (node->type == NodeType::Text) {
+
+		FontInfo info = font_info_from_node(*node);
+		auto font = font_cache.get_font(info);
+
 		Text const& text = static_cast<Text const&>(*node);
-
-		bool is_bold = false;
-		if (text.styles.find("font-weight")->second == "bold") {
-			is_bold = true;
-		}
-
-		bool is_italic = false;
-		if (text.styles.find("font-style")->second == "italic") {
-			is_italic = true;
-		}
-
-		std::string_view font_family { text.styles.find("font-family")->second };
-		std::string_view size_str { text.styles.find("font-size")->second };
-		size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
-		size = static_cast<float>(size) * 0.75;
-
-		auto font = font_cache.get_font(font_family, size, is_bold, is_italic);
 		std::vector<std::string_view> words = split_on_any(text.text);
 		for (auto w : words) {
 			w = trim_whitespace(w);
@@ -557,6 +540,8 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 			new_line(node);
 		} else if (element.tag == "input" || element.tag == "button") {
 			input(node, font_cache);
+		} else if (element.tag == "script" || element.tag == "style") {
+			// do nothing
 		} else {
 			for (auto child : element.children) {
 				recurse(child, font_cache);
@@ -583,23 +568,8 @@ void BlockLayout::input(std::shared_ptr<Node> node, FontCache& font_cache) {
 	auto input = std::make_shared<InputLayout>(node, line, previous_word);
 	line->m_children.push_back(input);
 
-	bool is_bold = false;
-	if (node->styles.find("font-weight")->second == "bold") {
-		is_bold = true;
-	}
-
-	bool is_italic = false;
-	if (node->styles.find("font-style")->second == "italic") {
-		is_italic = true;
-	}
-
-	std::string_view font_family { node->styles.find("font-family")->second };
-	std::string_view size_str { node->styles.find("font-size")->second };
-	// todo: no alloc, no exception, add someting like this to utils?
-	size_t size = std::stoi(std::string{size_str.substr(0, size_str.size() - 2)});
-	size = static_cast<float>(size) * 0.75;
-
-	auto font = font_cache.get_font(font_family, size, is_bold, is_italic);
+	FontInfo info = font_info_from_node(*node);
+	auto font = font_cache.get_font(info);
 	m_cursor_x += w + font->measureText(" ", 1, SkTextEncoding::kUTF8);
 }
 

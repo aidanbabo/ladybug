@@ -115,7 +115,8 @@ void Tab::load(HttpRequest request, bool alter_history) {
 		m_rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;
 		html_tree_to_list(m_nodes, nodes);
-		// true means we must fetch, false means inline
+		// todo: Find a way to reuse the style and script fetching/executing code.
+		// True means we must fetch and false means inline.
 		std::vector<std::pair<std::string, bool>> styles;
 		for (auto const& node : nodes) {
 			if (node->type != NodeType::Element) {
@@ -177,18 +178,26 @@ void Tab::load(HttpRequest request, bool alter_history) {
 			return p.first->priority;
 		});
 
-		std::vector<std::string> scripts;
+		std::vector<std::pair<std::string, bool>> scripts;
 		for (auto const& node : nodes) {
 			if (node->type != NodeType::Element) {
 				continue;
 			}
 
 			auto element = static_cast<Element const&>(*node);
-			if (element.tag != "script") {
-				continue;
-			}
-			if (auto f = element.attributes.find("src"); f != element.attributes.end()) {
-				scripts.push_back(f->second);
+			if (element.tag == "script" && !element.children.empty()) {
+				Node const& child = *element.children[0];
+				if (child.type == NodeType::Text) {
+					auto text = static_cast<Text const&>(child);
+					scripts.push_back(std::make_pair(text.text, false));
+				}
+			} else {
+				if (element.tag != "script") {
+					continue;
+				}
+				if (auto f = element.attributes.find("src"); f != element.attributes.end()) {
+					scripts.push_back(std::make_pair(f->second, true));
+				}
 			}
 		}
 
@@ -196,20 +205,27 @@ void Tab::load(HttpRequest request, bool alter_history) {
 			m_js.reset();
 		}
 		m_js.emplace(*this);
-		for (auto const& access : scripts) {
-			auto script_url = request.url.resolve(access);
-			if (!script_url) {
-				std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
-				continue;
+		for (auto const& [access, must_fetch] : scripts) {
+			if (must_fetch) {
+				auto script_url = request.url.resolve(access);
+				if (!script_url) {
+					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
+					continue;
+				}
+				auto code = m_connection_manager.request(*script_url);
+				if (!code) {
+					std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
+					continue;
+				}
+				if (!m_js->run(*code)) {
+					std::cerr << "Script " << *script_url << " crashed" << std::endl;;
+				}
+			} else {
+				if (!m_js->run(access)) {
+					std::cerr << "Inline script crashed" << std::endl;;
+				}
 			}
-			auto code = m_connection_manager.request(*script_url);
-			if (!code) {
-				std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
-				continue;
-			}
-			if (!m_js->run(*code)) {
-				std::cerr << "Script " << *script_url << " crashed" << std::endl;;
-			}
+
 		}
 
 		render();
@@ -280,10 +296,10 @@ std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
 
 void Tab::render() {
 	m_nodes->style(m_rules);
-	//print_node(*m_nodes);
+	print_node(*m_nodes);
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
 	m_document->layout(m_font_cache);
-	//m_document->print_layout();
+	m_document->print_layout();
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
 }

@@ -248,8 +248,10 @@ std::shared_ptr<Node> HTMLParser::parse() {
 			std::string_view script_end = "</script>";
 			size_t script_end_start = m_body.find(script_end, i);
 			if (script_end_start == std::string::npos) {
+				add_text(std::string{m_body.substr(i)});
 				i = m_body.size();
 			} else {
+				add_text(std::string{m_body.substr(i, script_end_start - i)});
 				add_tag(std::string{ "/script" });
 				// Out of bounds is ok.
 				i = script_end_start + script_end.size();

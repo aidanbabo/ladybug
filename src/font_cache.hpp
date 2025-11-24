@@ -50,4 +50,5 @@ public:
 	void add_type(std::string name, FontType type);
 
 	std::shared_ptr<SkFont> get_font(std::string_view name, size_t size, bool bold, bool italic);
+	std::shared_ptr<SkFont> get_font(FontInfo info);
 };

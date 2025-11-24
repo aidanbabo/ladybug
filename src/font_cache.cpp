@@ -30,29 +30,33 @@ std::shared_ptr<SkFont> FontCache::get_font(std::string_view name, size_t size, 
 		.bold = bold,
 		.italic = italic,
 	};
+	return get_font(info);
+}
+
+std::shared_ptr<SkFont> FontCache::get_font(FontInfo info) {
 	if (auto f = m_fonts.find(info); f != m_fonts.end()) {
 		return f->second;
 	}
 
-	auto font_type = m_font_types.find(name);
+	auto font_type = m_font_types.find(info.name);
 	if (font_type == m_font_types.end()) {
-		std::cerr << "Unsupported font " << name << std::endl;
+		std::cerr << "Unsupported font " << info.name << std::endl;
 		font_type = m_font_types.find("times");
 		assert(font_type != m_font_types.end());
 	}
 	sk_sp<SkTypeface> typeface = [&] {
-		if (!bold && !italic) {
+		if (!info.bold && !info.italic) {
 			return font_type->second.normal;
-		} else if (bold && !italic) {
+		} else if (info.bold && !info.italic) {
 			return font_type->second.bold;
-		} else if (!bold && italic) {
+		} else if (!info.bold && info.italic) {
 			return font_type->second.italic;
-		} else if (bold && italic) {
+		} else if (info.bold && info.italic) {
 			return font_type->second.bold_italic;
 		} else {
 			assert(false && "unreachable");
 		}
 	}();
-	m_fonts[info] = std::make_shared<SkFont>(typeface, size);
+	m_fonts[info] = std::make_shared<SkFont>(typeface, info.size);
 	return m_fonts[info];
 }
