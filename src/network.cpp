@@ -633,9 +633,12 @@ public:
 							length--;
 						}
 						if (length != 0) {
-							// todo: no alloc
-							std::string s(next_in, length);
-							int adding = std::stoi(s, 0, 16);
+							std::string_view s(next_in, length);
+							int adding;
+							if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
+								// todo: is it really fatal?
+								assert(false && "Fatal network error");
+							}
 							size_of_current_chunk = (size_of_current_chunk << length) + adding;
 						}
 
@@ -650,9 +653,12 @@ public:
 					} else {
 						int length = newline - next_in;
 						if (length != 0) {
-							// todo: no alloc
-							std::string s(next_in, length);
-							int adding = std::stoi(s, 0, 16);
+							std::string_view s(next_in, length);
+							int adding;
+							if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
+								// todo: is it really fatal?
+								assert(false && "Fatal network error");
+							}
 							size_of_current_chunk = (size_of_current_chunk << length) + adding;
 						}
 
@@ -692,7 +698,6 @@ public:
 		} else {
 			// we break in the middle of this loop because of the data we start with
 			for (;;) {
-
 				int amount_to_read = std::min(total_content_length - current_content_length, avail_in);
 
 				decode_exact(next_in, amount_to_read, decompress, &zstream, response);
