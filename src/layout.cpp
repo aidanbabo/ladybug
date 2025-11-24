@@ -184,9 +184,18 @@ void InputLayout::layout(FontCache& font_cache) {
 
 	m_width = INPUT_WIDTH_PX;
 	if (auto prev = m_previous.lock()) {
-		auto text_prev = dynamic_cast<TextLayout *>(&*prev);
-		auto space = text_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
-		m_x = prev->m_x + space + prev->m_width;
+		m_x = prev->m_x + prev->m_width;
+		// todo: sort of hacky
+		if (auto text_prev = dynamic_cast<TextLayout *>(&*prev)) {
+			auto space = text_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		} else if (auto input_prev = dynamic_cast<TextLayout *>(&*prev)) {
+			auto space = input_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		} else {
+			auto space = m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		}
 	} else {
 		m_x = m_parent.lock()->m_x;
 	}
@@ -254,9 +263,18 @@ void TextLayout::layout(FontCache& font_cache) {
 
 	m_width = m_font->measureText(m_word.data(), m_word.size(), SkTextEncoding::kUTF8);
 	if (auto prev = m_previous.lock()) {
-		auto text_prev = dynamic_cast<TextLayout *>(&*prev);
-		auto space = text_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
-		m_x = prev->m_x + space + prev->m_width;
+		m_x = prev->m_x + prev->m_width;
+		// todo: sort of hacky
+		if (auto text_prev = dynamic_cast<TextLayout *>(&*prev)) {
+			auto space = text_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		} else if (auto input_prev = dynamic_cast<TextLayout *>(&*prev)) {
+			auto space = input_prev->m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		} else {
+			auto space = m_font->measureText(" ", 1, SkTextEncoding::kUTF8);
+			m_x += space;
+		}
 	} else {
 		m_x = m_parent.lock()->m_x;
 	}
