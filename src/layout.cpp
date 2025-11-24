@@ -422,6 +422,13 @@ void BlockLayout::layout(FontCache& font_cache) {
 			m_width = m_parent.lock()->m_width;
 		}
 	}
+	if (auto previous = m_previous.lock()) {
+		m_y = previous->m_y + previous->m_height;
+	} else {
+		// can't access protected member :(
+		m_y = m_parent.lock()->m_y;
+	}
+
 	if (m_nodes[0]->type == NodeType::Element) {
 		auto element = static_cast<Element const&>(*m_nodes[0]);
 		if (element.tag == "li") {
@@ -433,12 +440,6 @@ void BlockLayout::layout(FontCache& font_cache) {
 			m_height = 0;
 			return;
 		}
-	}
-	if (auto previous = m_previous.lock()) {
-		m_y = previous->m_y + previous->m_height; 
-	} else {
-		// can't access protected member :(
-		m_y = m_parent.lock()->m_y;
 	}
 
 	LayoutMode mode = layout_mode();
