@@ -628,19 +628,30 @@ public:
 					char *newline = (char *)memmem(next_in, avail_in, "\r\n", 2);
 					if (newline == nullptr) {
 						int length = avail_in;
-						assert(next_in[avail_in - 1] != '\r' && "Not handling split \\r\\n!");
-						std::string s(next_in, length);
-						if (s != "") {
+						bool ends_with_carraige_return = next_in[avail_in - 1] == '\r';
+						if (ends_with_carraige_return) {
+							length--;
+						}
+						if (length != 0) {
+							// todo: no alloc
+							std::string s(next_in, length);
 							int adding = std::stoi(s, 0, 16);
 							size_of_current_chunk = (size_of_current_chunk << length) + adding;
 						}
 
-						avail_in = read(input_buffer, input_buffer_size);
+						if (ends_with_carraige_return) {
+							input_buffer[0] = '\r';
+							avail_in = read(input_buffer + 1, input_buffer_size - 1) + 1;
+							next_in = input_buffer;
+						} else {
+							avail_in = read(input_buffer, input_buffer_size);
+						}
 						next_in = input_buffer;
 					} else {
 						int length = newline - next_in;
-						std::string s(next_in, length);
-						if (s != "") {
+						if (length != 0) {
+							// todo: no alloc
+							std::string s(next_in, length);
 							int adding = std::stoi(s, 0, 16);
 							size_of_current_chunk = (size_of_current_chunk << length) + adding;
 						}

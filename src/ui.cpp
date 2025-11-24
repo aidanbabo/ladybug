@@ -296,10 +296,10 @@ std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
 
 void Tab::render() {
 	m_nodes->style(m_rules);
-	print_node(*m_nodes);
+	//print_node(*m_nodes);
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
 	m_document->layout(m_font_cache);
-	m_document->print_layout();
+	//m_document->print_layout();
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
 }
