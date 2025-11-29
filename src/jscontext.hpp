@@ -20,6 +20,7 @@ class JSContext {
 	static duk_ret_t duk_query_selector_all(duk_context *ctx);
 	static duk_ret_t duk_node_get_attribute(duk_context *ctx);
 	static duk_ret_t duk_node_set_inner_html(duk_context *ctx);
+	static duk_ret_t duk_node_children(duk_context *ctx);
 
 	void inject_console(duk_context *ctx);
 	void inject_document(duk_context *ctx);

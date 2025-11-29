@@ -6,6 +6,12 @@
     <p>Comment: <input name=comment value=2></p>
     <p><button>Submit!</button></p>
 </form>
+
+<div class=divv>
+	<p>First thing</p>
+	<p>Second thing</p>
+</div>
+
 <script>
 	try {
 		var selected = document.querySelectorAll(".selectme");
@@ -28,5 +34,10 @@
 	var inputs = document.querySelectorAll("input");
 	for (var i = 0; i < inputs.length; i++) {
 	    inputs[i].addEventListener("keydown", lengthCheck);
+	}
+
+	var div = document.querySelectorAll('.divv')[0];
+	for (var i = 0; i < div.children.length; i++) {
+		console.log('Child', i, 'with handle', div.children[i].handle);
 	}
 </script>

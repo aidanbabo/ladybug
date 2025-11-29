@@ -150,6 +150,41 @@ duk_ret_t JSContext::duk_node_set_inner_html(duk_context *ctx) {
 	return 0;
 }
 
+duk_ret_t JSContext::duk_node_children(duk_context *ctx) {
+	// Get args.
+	duk_push_this(ctx);
+	assert(duk_get_prop_string(ctx, -1, "handle"));
+	int handle = duk_get_int_default(ctx, -1, -1);
+	if (handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop_2(ctx);
+
+	// Get jsctx.
+	duk_push_heap_stash(ctx);
+	duk_get_prop_string(ctx, -1, "jscontext");
+	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
+	duk_pop_2(ctx);
+
+	auto elt = jsctx->m_handle_to_node.at(handle);
+	duk_push_array(ctx);
+	size_t i = 0;
+	for (auto const& n : elt->children) {
+		if (n->type != NodeType::Element) {
+			continue;
+		}
+		int child_handle = jsctx->get_handle(n);
+		assert(duk_get_global_string(ctx, "Node"));
+		duk_push_int(ctx, child_handle);
+		assert(duk_pnew(ctx, 1) == 0);
+
+		duk_put_prop_string(ctx, -2, std::to_string(i).c_str());
+		i++;
+	}
+
+	return 1;
+}
+
 void JSContext::extend_node(duk_context *ctx) {
 	assert(duk_get_global_string(ctx, "Node"));
 	assert(duk_get_prop_string(ctx, -1, "prototype"));
@@ -162,6 +197,11 @@ void JSContext::extend_node(duk_context *ctx) {
 	duk_push_c_function(ctx, duk_node_set_inner_html, 1);
 
 	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_SET_ENUMERABLE);
+
+	duk_push_string(ctx, "children");
+	duk_push_c_function(ctx, duk_node_children, 1);
+
+	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_SET_ENUMERABLE);
 
 	// we still have [node, proto] rn
 
