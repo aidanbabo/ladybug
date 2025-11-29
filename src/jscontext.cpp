@@ -8,6 +8,24 @@
 
 #include "jscontext.hpp"
 
+static JSContext *get_js_context(duk_context *ctx) {
+	duk_push_heap_stash(ctx);
+	duk_get_prop_string(ctx, -1, "jscontext");
+	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
+	duk_pop_2(ctx);
+	return jsctx;
+}
+
+static void remove_child(Node& parent, std::shared_ptr<Node> child) {
+	for (size_t i = 0; i < parent.children.size(); i++) {
+		if (parent.children[i] == child) {
+			parent.children.erase(parent.children.begin() + i);
+			return;
+		}
+	}
+	assert(false && "Unreachable");
+}
+
 duk_ret_t JSContext::duk_console_log(duk_context *ctx) {
 	std::cout << "console.log from js: ";
 
@@ -38,7 +56,7 @@ void JSContext::inject_console(duk_context *ctx) {
 	duk_pop(ctx);
 }
 
-duk_ret_t JSContext::duk_query_selector_all(duk_context *ctx) {
+duk_ret_t JSContext::duk_document_query_selector_all(duk_context *ctx) {
 	char const* string = duk_get_string(ctx, -1);
 	if (!string) {
 		return DUK_RET_TYPE_ERROR;
@@ -48,11 +66,7 @@ duk_ret_t JSContext::duk_query_selector_all(duk_context *ctx) {
 		return DUK_RET_ERROR;
 	}
 
-	duk_push_heap_stash(ctx);
-	duk_get_prop_string(ctx, -1, "jscontext");
-	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
-	duk_pop_2(ctx);
-
+	auto jsctx = get_js_context(ctx);
 
 	std::vector<std::shared_ptr<Node>> nodes;
 	html_tree_to_list(jsctx->m_tab.m_nodes, nodes);
@@ -74,15 +88,34 @@ duk_ret_t JSContext::duk_query_selector_all(duk_context *ctx) {
 	return 1;
 }
 
+duk_ret_t JSContext::duk_document_create_element(duk_context *ctx) {
+	char const* tag = duk_get_string(ctx, -1);
+	if (!tag) {
+		return DUK_RET_TYPE_ERROR;
+	}
+	auto jsctx = get_js_context(ctx);
+	auto element = std::make_shared<Element>(std::weak_ptr<Node>{}, std::string{tag}, std::unordered_map<std::string, std::string>{});
+	int handle = jsctx->get_handle(element);
+
+	assert(duk_get_global_string(ctx, "Node"));
+	duk_push_int(ctx, handle);
+	assert(duk_pnew(ctx, 1) == 0);
+
+	return 1;
+}
+
 void JSContext::inject_document(duk_context *ctx) {
 	// push global
 	duk_push_global_object(ctx);
 	// create document
 	duk_push_object(ctx);
-	// push our function
-	duk_push_c_function(ctx, duk_query_selector_all, 1);
-	// put it under log in document
+
+	duk_push_c_function(ctx, duk_document_query_selector_all, 1);
 	duk_put_prop_string(ctx, -2, "querySelectorAll");
+
+	duk_push_c_function(ctx, duk_document_create_element, 1);
+	duk_put_prop_string(ctx, -2, "createElement");
+
 	// put it under console in global object
 	duk_put_prop_string(ctx, -2, "document");
 	// pop global
@@ -100,11 +133,7 @@ duk_ret_t JSContext::duk_node_get_attribute(duk_context *ctx) {
 	}
 	duk_pop_2(ctx);
 
-	// Get jsctx.
-	duk_push_heap_stash(ctx);
-	duk_get_prop_string(ctx, -1, "jscontext");
-	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
-	duk_pop_2(ctx);
+	auto jsctx = get_js_context(ctx);
 
 	// Do call.
 	auto n = jsctx->m_handle_to_node.find(handle);
@@ -131,11 +160,7 @@ duk_ret_t JSContext::duk_node_set_inner_html(duk_context *ctx) {
 	}
 	duk_pop_2(ctx);
 
-	// Get jsctx.
-	duk_push_heap_stash(ctx);
-	duk_get_prop_string(ctx, -1, "jscontext");
-	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
-	duk_pop_2(ctx);
+	auto jsctx = get_js_context(ctx);
 
 	// Do call.
 	auto doc = HTMLParser(std::string{"<html><body>"} + s + "</body></html>").parse();
@@ -160,11 +185,7 @@ duk_ret_t JSContext::duk_node_children(duk_context *ctx) {
 	}
 	duk_pop_2(ctx);
 
-	// Get jsctx.
-	duk_push_heap_stash(ctx);
-	duk_get_prop_string(ctx, -1, "jscontext");
-	auto jsctx = static_cast<JSContext *>(duk_get_pointer(ctx, -1));
-	duk_pop_2(ctx);
+	auto jsctx = get_js_context(ctx);
 
 	auto elt = jsctx->m_handle_to_node.at(handle);
 	duk_push_array(ctx);
@@ -185,13 +206,88 @@ duk_ret_t JSContext::duk_node_children(duk_context *ctx) {
 	return 1;
 }
 
+duk_ret_t JSContext::duk_node_append_child(duk_context *ctx) {
+	duk_get_prop_string(ctx, -1, "handle");
+	int to_add_handle = duk_get_int_default(ctx, -1, -1);
+	if (to_add_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop(ctx);
+
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, "handle");
+	int parent_handle = duk_get_int_default(ctx, -1, -1);
+	if (parent_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop_2(ctx);
+
+	auto jsctx = get_js_context(ctx);
+	auto to_add = jsctx->m_handle_to_node.at(to_add_handle);
+	auto parent = jsctx->m_handle_to_node.at(parent_handle);
+
+	if (auto old_parent = to_add->parent.lock(); old_parent != nullptr) {
+		remove_child(*old_parent, to_add);
+	}
+
+	parent->children.push_back(to_add);
+	to_add->parent = parent;
+
+	duk_dup_top(ctx);
+	return 1;
+}
+
+duk_ret_t JSContext::duk_node_insert_before(duk_context *ctx) {
+	duk_get_prop_string(ctx, -2, "handle");
+	int to_add_handle = duk_get_int_default(ctx, -1, -1);
+	if (to_add_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop(ctx);
+
+	duk_get_prop_string(ctx, -1, "handle");
+	int before_this_node_handle = duk_get_int_default(ctx, -1, -1);
+	if (before_this_node_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop(ctx);
+
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, "handle");
+	int parent_handle = duk_get_int_default(ctx, -1, -1);
+	if (parent_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop_2(ctx);
+
+	auto jsctx = get_js_context(ctx);
+	auto to_add = jsctx->m_handle_to_node.at(to_add_handle);
+	auto parent = jsctx->m_handle_to_node.at(parent_handle);
+	auto before_this_node = jsctx->m_handle_to_node.at(before_this_node_handle);
+
+	auto before_location = std::find(parent->children.begin(), parent->children.end(), before_this_node);
+	if (before_location == parent->children.end()) {
+		return DUK_RET_ERROR;
+	}
+
+	if (auto old_parent = to_add->parent.lock(); old_parent != nullptr) {
+		remove_child(*old_parent, to_add);
+	}
+
+	parent->children.insert(before_location, to_add);
+	to_add->parent = parent;
+
+	duk_dup(ctx, -2);
+	return 1;
+}
+
 void JSContext::extend_node(duk_context *ctx) {
 	assert(duk_get_global_string(ctx, "Node"));
 	assert(duk_get_prop_string(ctx, -1, "prototype"));
 	duk_push_c_function(ctx, duk_node_get_attribute, 1);
 	duk_put_prop_string(ctx, -2, "getAttribute");
 
-	// we still have [node, proto] rn
+	// we still have [node, proto]
 
 	duk_push_string(ctx, "innerHTML");
 	duk_push_c_function(ctx, duk_node_set_inner_html, 1);
@@ -203,7 +299,15 @@ void JSContext::extend_node(duk_context *ctx) {
 
 	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_SET_ENUMERABLE);
 
-	// we still have [node, proto] rn
+	// we still have [node, proto]
+	
+	duk_push_c_function(ctx, duk_node_append_child, 1);
+	duk_put_prop_string(ctx, -2, "appendChild");
+
+	duk_push_c_function(ctx, duk_node_insert_before, 2);
+	duk_put_prop_string(ctx, -2, "insertBefore");
+
+	// we still have [node, proto]
 
 	duk_pop_2(ctx);
 }

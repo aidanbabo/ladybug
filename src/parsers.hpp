@@ -14,6 +14,7 @@ struct StyleSheet;
 
 struct Node {
 	std::vector<std::shared_ptr<Node>> children{};
+	// todo: Verify this is never a text node then change it to an Element
 	std::weak_ptr<Node> parent;
 	NodeType type;
 	std::unordered_map<std::string, std::string> styles{};

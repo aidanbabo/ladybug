@@ -17,10 +17,13 @@ class JSContext {
 	std::unordered_map<int, std::shared_ptr<Node>> m_handle_to_node;
 
 	static duk_ret_t duk_console_log(duk_context *ctx);
-	static duk_ret_t duk_query_selector_all(duk_context *ctx);
+	static duk_ret_t duk_document_query_selector_all(duk_context *ctx);
+	static duk_ret_t duk_document_create_element(duk_context *ctx);
 	static duk_ret_t duk_node_get_attribute(duk_context *ctx);
 	static duk_ret_t duk_node_set_inner_html(duk_context *ctx);
 	static duk_ret_t duk_node_children(duk_context *ctx);
+	static duk_ret_t duk_node_append_child(duk_context *ctx);
+	static duk_ret_t duk_node_insert_before(duk_context *ctx);
 
 	void inject_console(duk_context *ctx);
 	void inject_document(duk_context *ctx);

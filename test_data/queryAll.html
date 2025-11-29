@@ -40,4 +40,20 @@
 	for (var i = 0; i < div.children.length; i++) {
 		console.log('Child', i, 'with handle', div.children[i].handle);
 	}
+
+	var after = document.createElement('p');
+	console.log('After handle', after.handle);
+	after.innerHTML = 'Generated After!';
+	var after2 = div.appendChild(after);
+	console.log('After2 handle', after2.handle);
+
+	var before = document.createElement('p');
+	before.innerHTML = 'Generated Before!';
+	console.log('Before handle', before.handle);
+	var before2 = div.insertBefore(before, div.children[1]);
+	console.log('Before2 handle', before2.handle);
+	// this should delete the other copy and have it at the start of the div
+	var before3 = div.insertBefore(before, div.children[0]);
+	console.log('Before3 handle', before3.handle);
+
 </script>
