@@ -281,6 +281,38 @@ duk_ret_t JSContext::duk_node_insert_before(duk_context *ctx) {
 	return 1;
 }
 
+duk_ret_t JSContext::duk_node_remove_child(duk_context *ctx) {
+	duk_get_prop_string(ctx, -1, "handle");
+	int to_remove_handle = duk_get_int_default(ctx, -1, -1);
+	if (to_remove_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop(ctx);
+
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, "handle");
+	int parent_handle = duk_get_int_default(ctx, -1, -1);
+	if (parent_handle == -1) {
+		return DUK_RET_ERROR;
+	}
+	duk_pop_2(ctx);
+
+	auto jsctx = get_js_context(ctx);
+	auto to_remove = jsctx->m_handle_to_node.at(to_remove_handle);
+	auto parent = jsctx->m_handle_to_node.at(parent_handle);
+
+	if (auto old_parent = to_remove->parent.lock(); old_parent != parent) {
+		return DUK_RET_ERROR;
+	} else {
+		remove_child(*parent, to_remove);
+	}
+
+	to_remove->parent = std::weak_ptr<Node>{};
+
+	duk_dup_top(ctx);
+	return 1;
+}
+
 void JSContext::extend_node(duk_context *ctx) {
 	assert(duk_get_global_string(ctx, "Node"));
 	assert(duk_get_prop_string(ctx, -1, "prototype"));
@@ -306,6 +338,9 @@ void JSContext::extend_node(duk_context *ctx) {
 
 	duk_push_c_function(ctx, duk_node_insert_before, 2);
 	duk_put_prop_string(ctx, -2, "insertBefore");
+
+	duk_push_c_function(ctx, duk_node_remove_child, 1);
+	duk_put_prop_string(ctx, -2, "removeChild");
 
 	// we still have [node, proto]
 

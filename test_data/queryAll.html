@@ -8,38 +8,36 @@
 </form>
 
 <div class=divv>
-	<p>First thing</p>
-	<p>Second thing</p>
+	<p>First thing (demoted to second)</p>
+	<p>Second thing (moved to first!)</p>
 </div>
 
 <script>
-	try {
-		var selected = document.querySelectorAll(".selectme");
-		for (var i in selected) {
-			console.log('handle', selected[i].handle);
-			console.log('attribute', selected[i].getAttribute('attribute'));
-		}
-	} catch (e) {
-		console.log(e);
+	var selected = document.querySelectorAll(".selectme");
+	for (var i in selected) {
+		console.log('handle', selected[i].handle);
+		console.log('attribute', selected[i].getAttribute('attribute'));
 	}
 
 	function lengthCheck() {
-	    var name = this.getAttribute("name");
-	    var value = this.getAttribute("value");
-	    if (value.length > 100) {
-		console.log("Input " + name + " has too much text.");
-	    }
+		var name = this.getAttribute("name");
+		var value = this.getAttribute("value");
+		if (value.length > 100) {
+			console.log("Input " + name + " has too much text.");
+		}
 	}
 
 	var inputs = document.querySelectorAll("input");
 	for (var i = 0; i < inputs.length; i++) {
-	    inputs[i].addEventListener("keydown", lengthCheck);
+		inputs[i].addEventListener("keydown", lengthCheck);
 	}
 
 	var div = document.querySelectorAll('.divv')[0];
 	for (var i = 0; i < div.children.length; i++) {
 		console.log('Child', i, 'with handle', div.children[i].handle);
 	}
+	var first = div.children[0];
+	var second = div.children[1];
 
 	var after = document.createElement('p');
 	console.log('After handle', after.handle);
@@ -50,10 +48,13 @@
 	var before = document.createElement('p');
 	before.innerHTML = 'Generated Before!';
 	console.log('Before handle', before.handle);
-	var before2 = div.insertBefore(before, div.children[1]);
+	var before2 = div.insertBefore(before, second);
 	console.log('Before2 handle', before2.handle);
 	// this should delete the other copy and have it at the start of the div
-	var before3 = div.insertBefore(before, div.children[0]);
+	var before3 = div.insertBefore(before, first);
 	console.log('Before3 handle', before3.handle);
 
+	var s = div.removeChild(second);
+	console.log('Removed second handle', s.handle);
+	div.insertBefore(s, first);
 </script>

@@ -24,6 +24,7 @@ class JSContext {
 	static duk_ret_t duk_node_children(duk_context *ctx);
 	static duk_ret_t duk_node_append_child(duk_context *ctx);
 	static duk_ret_t duk_node_insert_before(duk_context *ctx);
+	static duk_ret_t duk_node_remove_child(duk_context *ctx);
 
 	void inject_console(duk_context *ctx);
 	void inject_document(duk_context *ctx);
