@@ -21,8 +21,10 @@
 // todo: Exercise 8-7: Persistence -> I don't care about the server
 // todo: Exercise 8-8: Rich buttons -> This one actually seems kind of cool and should be one of the first I come back to after completion
 // todo: Exercise 8-9: HTML chrome -> I am choosing to skip this because I think it's sort of a bad idea
+// todo: Exercise 9-4: IDs -> This is a crazy thing to be standard! It might speed up scripts a little bit but I'll skip it for now
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
+// todo: fixme: our preventDefault implementation also prevents further proper propagation in the event of navigation
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>

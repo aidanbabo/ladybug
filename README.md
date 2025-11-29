@@ -38,3 +38,7 @@ Some of the exercises have been done, only the ones I find technically interesti
 - Navigation through the URL bar, back/forward button and hyperlinks (`<a>` only).
 - Use GET/POST forms.
     - Will try to prevent you from doing form-resubmission through an alert.
+- Run ECMAScript (via Duktape) with support for simple DOM APIs.
+    - console.log, querySelectorAll, innerHTML (set only)
+    - createElement, addChild, insertBefore
+    - addEventListener, preventDefault, stopPropagation

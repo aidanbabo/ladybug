@@ -9,6 +9,11 @@
 
 class Tab;
 
+struct EventDispatchResult {
+	bool do_default;
+	bool propagate;
+};
+
 class JSContext {
 	duk_context *m_interp;
 	Tab& m_tab;
@@ -37,7 +42,7 @@ public:
 
 	// true on success!
 	bool run(std::string_view code);
-	// true means prevent default behavior
+
 	[[nodiscard]]
-	bool dispatch_event(std::string_view type, std::shared_ptr<Element> el);
+	EventDispatchResult dispatch_event(std::string_view type, std::shared_ptr<Element> el);
 };

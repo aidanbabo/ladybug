@@ -241,7 +241,19 @@ void Tab::load(HttpRequest request, bool alter_history) {
 }
 
 std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
-	if (m_js->dispatch_event("submit", node)) return std::nullopt;
+	bool do_default = true;
+	auto bubble = node;
+	while (bubble) {
+		auto res = m_js->dispatch_event("submit", node);
+		if (!res.do_default) do_default = false;
+		if (!res.propagate) break;
+		bubble = bubble->parent.lock();
+	}
+
+	if (!do_default) {
+		return std::nullopt;
+	}
+
 	auto url = m_url.resolve(node->attributes["action"]);
 	if (!url) {
 		return std::nullopt;
@@ -418,20 +430,29 @@ void Tab::scroll_down() {
 [[nodiscard]]
 std::optional<HttpRequest> Tab::keypress(SDL_KeyboardEvent event) {
 	if (m_focus != nullptr) {
-		if (m_js->dispatch_event("keydown", m_focus)) return std::nullopt;
-		if (event.key >= 0x20 && event.key < 0x7f) {
-			char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
-			m_focus->attributes["value"].push_back(c);
-			render();
-		} else if (event.key == SDLK_RETURN) {
-			auto el = m_focus;
-			while (el != nullptr) {
-				if (el->tag == "form" && el->attributes.contains("action")) {
-					return submit_form(el);
+		bool do_default = true;
+		auto n = m_focus;
+		while (n) {
+			auto res = m_js->dispatch_event("keydown", m_focus);
+			if (!res.do_default) do_default = false;
+			if (res.propagate) break;
+			n = n->parent.lock();
+		}
+		if (do_default) {
+			if (event.key >= 0x20 && event.key < 0x7f) {
+				char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
+				m_focus->attributes["value"].push_back(c);
+				render();
+			} else if (event.key == SDLK_RETURN) {
+				auto el = m_focus;
+				while (el != nullptr) {
+					if (el->tag == "form" && el->attributes.contains("action")) {
+						return submit_form(el);
+					}
+					auto parent = el->parent.lock();
+					assert(parent->type == NodeType::Element);
+					el = std::static_pointer_cast<Element>(parent);
 				}
-				auto parent = el->parent.lock();
-				assert(parent->type == NodeType::Element);
-				el = std::static_pointer_cast<Element>(parent);
 			}
 		}
 	}
@@ -457,35 +478,32 @@ std::optional<HttpRequest> Tab::click(float x, float y) {
 	// todo: this is a hack so we can only click on text/input elements AND so that we
 	// don't have to make a virtual function to get the current node from an element
 	// since BlockLayouts can have multiple nodes.
-	auto elt = [&]() -> std::shared_ptr<Node> {
+	auto elt = [&]() -> std::shared_ptr<Element> {
 		if (auto text = dynamic_cast<TextLayout *>(&*objs.back())) {
-			return text->m_node;
+			return text->m_node->parent.lock();
 		} else if (auto input = dynamic_cast<InputLayout *>(&*objs.back())) {
-			return input->m_node;
+			return input->m_node->parent.lock();
 		} else {
 			return nullptr;
 		}
 	}();
 	if (elt) {
 		while (elt != nullptr) {
-			if (elt->type == NodeType::Element) {
-				auto el = std::static_pointer_cast<Element>(elt);
+			auto el = std::static_pointer_cast<Element>(elt);
+
+			auto res = m_js->dispatch_event("click", el);
+			if (res.do_default) {
 				if (el->tag == "a") {
 					if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
-						if (m_js->dispatch_event("click", el)) return std::nullopt;
 						if (auto url = m_url.resolve(href->second)) {
 							return *url;
 						}
 					}
 				} else if (el->tag == "input") {
-					if (m_js->dispatch_event("click", el)) return std::nullopt;
 					el->attributes["value"] = "";
 					m_focus = el;
 					el->is_focused = true;
-					render();
-					return std::nullopt;
 				} else if (el->tag == "button") {
-					if (m_js->dispatch_event("click", el)) return std::nullopt;
 					while (el != nullptr) {
 						if (el->tag == "form" && el->attributes.contains("action")) {
 							return submit_form(el);
@@ -495,6 +513,10 @@ std::optional<HttpRequest> Tab::click(float x, float y) {
 						el = std::static_pointer_cast<Element>(parent);
 					}
 				}
+			}
+
+			if (!res.propagate) {
+				break;
 			}
 			elt = elt->parent.lock();
 		}

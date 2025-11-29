@@ -3,10 +3,15 @@ LISTENERS = {}
 function Event(type) {
 	this.type = type;
 	this.do_default = true;
+	this.propagate = true;
 }
 
 Event.prototype.preventDefault = function() {
 	this.do_default = false;
+}
+
+Event.prototype.stopPropagation = function() {
+	this.propagate = false;
 }
 
 function Node(handle) {
@@ -28,5 +33,5 @@ Node.prototype.dispatchEvent = function(evt) {
 	for (var i = 0; i < list.length; i++) {
 		list[i].call(this, evt);
 	}
-	return evt.do_default;
+	return evt;
 }

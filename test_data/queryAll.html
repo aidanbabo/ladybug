@@ -11,6 +11,12 @@
 	<p>First thing (demoted to second)</p>
 	<p>Second thing (moved to first!)</p>
 </div>
+<p class=pbutton style="background-color: lightblue;">Click me to print something!</p>
+<div class=notreached>
+	<div class=hrefdenied>
+		<a class=disableme href="https://browser.engineering">Click me to NOT go to browser.engineering!</a>
+	</div>
+</div>
 
 <script>
 	var selected = document.querySelectorAll(".selectme");
@@ -57,4 +63,16 @@
 	var s = div.removeChild(second);
 	console.log('Removed second handle', s.handle);
 	div.insertBefore(s, first);
+
+	var pbutton = document.querySelectorAll('.pbutton')[0];
+	pbutton.addEventListener('click', function() { console.log('I got click! :D'); });
+
+	var notreached = document.querySelectorAll('.notreached')[0];
+	notreached.addEventListener('click', function(e) { console.log('HAHAH I AM EVIL AND I AM PRINTING THERE BETTER BE A .stopPropagation CALL TO STOP ME!'); });
+
+	var hrefDenied = document.querySelectorAll('.hrefdenied')[0];
+	hrefDenied.addEventListener('click', function(e) { e.stopPropagation(); console.log('Get Denied!'); });
+
+	var disableme = document.querySelectorAll('.disableme')[0];
+	disableme.addEventListener('click', function(e) { e.preventDefault(); });
 </script>

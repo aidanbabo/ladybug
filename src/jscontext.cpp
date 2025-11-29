@@ -402,12 +402,24 @@ bool JSContext::run(std::string_view code) {
 	return duk_peval_lstring_noresult(m_interp, code.data(), code.size()) == 0;
 }
 
-bool JSContext::dispatch_event(std::string_view type, std::shared_ptr<Element> el) {
+EventDispatchResult JSContext::dispatch_event(std::string_view type, std::shared_ptr<Element> el) {
 	auto h = m_node_to_handle.find(el);
 	int handle = h != m_node_to_handle.end() ? h->second : -1;
 	std::string event_js { std::format("new Node({}).dispatchEvent(new Event(\"{}\"))", handle, type) };
 	assert(duk_peval_string(m_interp, event_js.c_str()) == 0);
+
+	duk_get_prop_string(m_interp, -1, "do_default");
 	bool do_default = duk_to_boolean(m_interp, -1);
 	duk_pop(m_interp);
-	return !do_default;
+
+	duk_get_prop_string(m_interp, -1, "propagate");
+	bool propagate = duk_to_boolean(m_interp, -1);
+	duk_pop(m_interp);
+
+	duk_pop(m_interp);
+
+	return EventDispatchResult {
+		.do_default = do_default,
+		.propagate = propagate,
+	};
 }
