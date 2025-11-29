@@ -94,7 +94,7 @@ duk_ret_t JSContext::duk_document_create_element(duk_context *ctx) {
 		return DUK_RET_TYPE_ERROR;
 	}
 	auto jsctx = get_js_context(ctx);
-	auto element = std::make_shared<Element>(std::weak_ptr<Node>{}, std::string{tag}, std::unordered_map<std::string, std::string>{});
+	auto element = std::make_shared<Element>(std::weak_ptr<Element>{}, std::string{tag}, std::unordered_map<std::string, std::string>{});
 	int handle = jsctx->get_handle(element);
 
 	assert(duk_get_global_string(ctx, "Node"));
@@ -166,7 +166,11 @@ duk_ret_t JSContext::duk_node_set_inner_html(duk_context *ctx) {
 	auto doc = HTMLParser(std::string{"<html><body>"} + s + "</body></html>").parse();
 	auto new_nodes = doc->children[0]->children;
 	// todo: there should be away for there to be optionals :(
-	auto elt = jsctx->m_handle_to_node.at(handle);
+	auto elt_node = jsctx->m_handle_to_node.at(handle);
+	if (elt_node->type != NodeType::Element) {
+		return DUK_RET_ERROR;
+	}
+	auto elt = std::static_pointer_cast<Element>(elt_node);
 	elt->children = new_nodes;
 	for (auto& child : elt->children) {
 		child->parent = elt;
@@ -224,7 +228,11 @@ duk_ret_t JSContext::duk_node_append_child(duk_context *ctx) {
 
 	auto jsctx = get_js_context(ctx);
 	auto to_add = jsctx->m_handle_to_node.at(to_add_handle);
-	auto parent = jsctx->m_handle_to_node.at(parent_handle);
+	auto parent_node = jsctx->m_handle_to_node.at(parent_handle);
+	if (parent_node->type != NodeType::Element) {
+		return DUK_RET_ERROR;
+	}
+	auto parent = std::static_pointer_cast<Element>(parent_node);
 
 	if (auto old_parent = to_add->parent.lock(); old_parent != nullptr) {
 		remove_child(*old_parent, to_add);
@@ -262,8 +270,12 @@ duk_ret_t JSContext::duk_node_insert_before(duk_context *ctx) {
 
 	auto jsctx = get_js_context(ctx);
 	auto to_add = jsctx->m_handle_to_node.at(to_add_handle);
-	auto parent = jsctx->m_handle_to_node.at(parent_handle);
 	auto before_this_node = jsctx->m_handle_to_node.at(before_this_node_handle);
+	auto parent_node = jsctx->m_handle_to_node.at(parent_handle);
+	if (parent_node->type != NodeType::Element) {
+		return DUK_RET_ERROR;
+	}
+	auto parent = std::static_pointer_cast<Element>(parent_node);
 
 	auto before_location = std::find(parent->children.begin(), parent->children.end(), before_this_node);
 	if (before_location == parent->children.end()) {
@@ -307,7 +319,7 @@ duk_ret_t JSContext::duk_node_remove_child(duk_context *ctx) {
 		remove_child(*parent, to_remove);
 	}
 
-	to_remove->parent = std::weak_ptr<Node>{};
+	to_remove->parent = std::weak_ptr<Element>{};
 
 	duk_dup_top(ctx);
 	return 1;

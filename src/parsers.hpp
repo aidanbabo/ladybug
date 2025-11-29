@@ -11,16 +11,16 @@ enum class NodeType {
 };
 
 struct StyleSheet;
+struct Element;
 
 struct Node {
 	std::vector<std::shared_ptr<Node>> children{};
-	// todo: Verify this is never a text node then change it to an Element
-	std::weak_ptr<Node> parent;
+	std::weak_ptr<Element> parent;
 	NodeType type;
 	std::unordered_map<std::string, std::string> styles{};
 	bool is_focused = false;
 
-	Node(std::weak_ptr<Node> parent, NodeType type);
+	Node(std::weak_ptr<Element> parent, NodeType type);
 	void style(StyleSheet const& rules);
 };
 
@@ -42,14 +42,14 @@ struct StyleSheet {
 struct Text : public Node  {
 	std::string text;
 
-	Text(std::weak_ptr<Node> parent, std::string text);
+	Text(std::weak_ptr<Element> parent, std::string text);
 };
 
 struct Element : public Node  {
 	std::string tag;
 	std::unordered_map<std::string, std::string> attributes;
 
-	Element(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes);
+	Element(std::weak_ptr<Element> parent, std::string tag, std::unordered_map<std::string, std::string> attributes);
 };
 
 class HTMLParser {

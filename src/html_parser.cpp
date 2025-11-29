@@ -10,18 +10,18 @@
 constexpr std::array SELF_CLOSING_TAGS = { "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr" };
 constexpr std::array HEAD_TAGS = { "base", "basefont", "bgsound", "noscript", "link", "meta", "title", "style", "script" };
 
-Node::Node(std::weak_ptr<Node> parent, NodeType type)
+Node::Node(std::weak_ptr<Element> parent, NodeType type)
 	: children()
 	, parent(parent)
 	, type(type)
 {}
 
-Text::Text(std::weak_ptr<Node> parent, std::string text)
+Text::Text(std::weak_ptr<Element> parent, std::string text)
 	: Node(parent, NodeType::Text)
 	, text(text)
 {}
 
-Element::Element(std::weak_ptr<Node> parent, std::string tag, std::unordered_map<std::string, std::string> attributes)
+Element::Element(std::weak_ptr<Element> parent, std::string tag, std::unordered_map<std::string, std::string> attributes)
 	: Node(parent, NodeType::Element)
 	, tag(tag)
 	, attributes(attributes)
@@ -115,7 +115,7 @@ void HTMLParser::add_text(std::string text) {
 	implicit_tags(std::nullopt);
 	assert(!m_unfinished.empty());
 
-	std::shared_ptr<Node> parent = m_unfinished.back();
+	std::shared_ptr<Element> parent = m_unfinished.back();
 	std::shared_ptr<Node> node = std::make_shared<Text>(parent, text);
 	parent->children.push_back(node);
 }
@@ -190,7 +190,7 @@ std::optional<std::shared_ptr<Element>> HTMLParser::add_tag(std::string tag_) {
 		return node;
 	} else if (std::find(SELF_CLOSING_TAGS.begin(), SELF_CLOSING_TAGS.end(), tag) != SELF_CLOSING_TAGS.end()) {
 		assert(!m_unfinished.empty());
-		std::shared_ptr<Node> parent = m_unfinished.back();
+		std::shared_ptr<Element> parent = m_unfinished.back();
 		std::shared_ptr<Element> node = std::make_shared<Element>(parent, tag, attributes);
 		parent->children.push_back(node);
 		return node;
@@ -209,7 +209,7 @@ std::optional<std::shared_ptr<Element>> HTMLParser::add_tag(std::string tag_) {
 			// so that we can shift the parser into a different state, in which case we don't care about closing
 			// <p> or <li> tags.
 		}
-		std::shared_ptr<Node> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
+		std::shared_ptr<Element> parent = m_unfinished.empty() ? nullptr : m_unfinished.back();
 		std::shared_ptr<Element> node = std::make_shared<Element>(parent, tag, attributes);
 		m_unfinished.push_back(node);
 		return node;
