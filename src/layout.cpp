@@ -172,7 +172,7 @@ bool LayoutBase::should_paint() const {
 	return true;
 }
 
-InputLayout::InputLayout(std::shared_ptr<Node> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
+InputLayout::InputLayout(std::shared_ptr<Element> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
 	: LayoutBase(parent)
 	, m_node(std::move(node))
 	, m_previous(previous)
@@ -200,9 +200,13 @@ void InputLayout::layout(FontCache& font_cache) {
 		m_x = m_parent.lock()->m_x;
 	}
 
-	SkFontMetrics m;
-	m_font->getMetrics(&m);
-	m_height = m.fDescent - m.fAscent; // todo: should be linespace
+	if (auto ty = m_node->attributes.find("type"); ty != m_node->attributes.end() && ty->second == "hidden") {
+		m_height = 0;
+	} else {
+		SkFontMetrics m;
+		m_font->getMetrics(&m);
+		m_height = m.fDescent - m.fAscent; // todo: should be linespace
+	}
 
 }
 
@@ -225,7 +229,11 @@ void InputLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 	std::string text;
 	if (element.tag == "input") {
 		if (auto v = element.attributes.find("value"); v != element.attributes.end()) {
-			text = v->second;
+			if (auto f = element.attributes.find("type"); f != element.attributes.end() && f->second == "password") {
+				text = std::string(v->second.size(), '*');
+			} else {
+				text = v->second;
+			}
 		}
 	} else if (element.tag == "button") {
 		if (element.children.size() == 1 && element.children[0]->type == NodeType::Text) {
@@ -247,7 +255,7 @@ void InputLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 }
 
 std::vector<std::shared_ptr<Node>> InputLayout::nodes() const {
-	return std::vector{m_node};
+	return std::vector{std::static_pointer_cast<Node>(m_node)};
 }
 
 TextLayout::TextLayout(std::shared_ptr<Node> node, std::string word, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
@@ -554,19 +562,20 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 			}
 		}
 	} else if (node->type == NodeType::Element) {
-		Element const& element = static_cast<Element const&>(*node);
-		if (element.tag == "br") {
+		auto element = std::static_pointer_cast<Element>(node);
+		auto const& tag = element->tag;
+		if (tag == "br") {
 			new_line(node);
-		} else if (element.tag == "input" || element.tag == "button") {
-			input(node, font_cache);
-		} else if (element.tag == "script" || element.tag == "style") {
+		} else if (tag == "input" || tag == "button") {
+			input(element, font_cache);
+		} else if (tag == "script" || tag == "style") {
 			// do nothing
 		} else {
-			for (auto child : element.children) {
+			for (auto child : element->children) {
 				recurse(child, font_cache);
 			}
 		}
-		if (element.tag == "p") {
+		if (tag == "p") {
 			// todo: move to css? margin bottom?
 			new_line(node);
 			//m_cursor_y += VSTEP;
@@ -576,7 +585,7 @@ void BlockLayout::recurse(std::shared_ptr<Node> node, FontCache& font_cache) {
 	}
 }
 
-void BlockLayout::input(std::shared_ptr<Node> node, FontCache& font_cache) {
+void BlockLayout::input(std::shared_ptr<Element> node, FontCache& font_cache) {
 	auto w = INPUT_WIDTH_PX;
 	if (m_cursor_x + w > m_width) {
 		new_line(node);

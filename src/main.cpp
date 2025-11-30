@@ -24,6 +24,11 @@
 // todo: Exercise 9-4: IDs -> This is a crazy thing to be standard! It might speed up scripts a little bit but I'll skip it for now
 // todo: Exercise 9-6: Serializing HTML -> Coolish? Not very useful in my day to day
 // todo: Exercise 9-7: Script-added scripts and style sheets -> I want to add this later for sure I am just itching to get to the part where we use Skia for real
+// todo: Exercise 10-2: Certificate errors -> Networking needs an overhaul I'm putting off
+// todo: Exercise 10-3: Script access -> I really wanna get to Skia! (and JS functions are super annoying rn!)
+// todo: Exercise 10-4: Cookie Expiration -> Networking needs an overhaul I'm putting off
+// todo: Exercise 10-5: Cross-origin resource sharing (CORS) -> Networking needs an overhaul I'm putting off
+// todo: Exercise 10-6: Referer -> I think this is a bad idea! I may implement it so the default behavior is no referrer, but also network stack yatta yatta
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 // todo: fixme: our preventDefault implementation also prevents further proper propagation in the event of navigation

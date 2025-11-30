@@ -42,3 +42,4 @@ Some of the exercises have been done, only the ones I find technically interesti
     - console.log, querySelectorAll, innerHTML (set only)
     - createElement, addChild, insertBefore
     - addEventListener, preventDefault, stopPropagation
+- Supports cookies and protects from XSS attacks with SameSite and simple CSP (default-src)

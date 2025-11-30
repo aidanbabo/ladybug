@@ -973,6 +973,7 @@ std::optional<HttpResponse> ConnectionManager::load_http_or_from_cache(HttpReque
 				}
 				auto connection { HttpConnection::create(request.url.host.c_str(), request.url.port, encrypted) };
 				if (connection) {
+					// todo: move to if else below in the network rework
 					m_active_connections.insert({reusable_base, std::move(*connection)});
 					HttpConnection *conn = m_active_connections[reusable_base].get();
 					return conn;
