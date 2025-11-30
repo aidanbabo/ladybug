@@ -22,6 +22,8 @@
 // todo: Exercise 8-8: Rich buttons -> This one actually seems kind of cool and should be one of the first I come back to after completion
 // todo: Exercise 8-9: HTML chrome -> I am choosing to skip this because I think it's sort of a bad idea
 // todo: Exercise 9-4: IDs -> This is a crazy thing to be standard! It might speed up scripts a little bit but I'll skip it for now
+// todo: Exercise 9-6: Serializing HTML -> Coolish? Not very useful in my day to day
+// todo: Exercise 9-7: Script-added scripts and style sheets -> I want to add this later for sure I am just itching to get to the part where we use Skia for real
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 // todo: fixme: our preventDefault implementation also prevents further proper propagation in the event of navigation

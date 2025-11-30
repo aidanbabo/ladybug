@@ -175,6 +175,7 @@ duk_ret_t JSContext::duk_node_set_inner_html(duk_context *ctx) {
 	for (auto& child : elt->children) {
 		child->parent = elt;
 	}
+	// todo: don't we call render everywhere we need it?
 	jsctx->m_tab.render();
 	return 0;
 }
