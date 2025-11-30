@@ -72,8 +72,10 @@ static std::string url_encode_parameters(std::vector<std::pair<std::string, std:
 }
 
 
+// todo: I don't like how partially constructed a Tab object is, there is no need for m_url to be null just for
+// Cross-Site Requests
 void Tab::load(HttpRequest request, bool alter_history) {
-	if (request.method == HttpMethod::GET && m_url.equal_disregarding_fragment(request.url)) {
+	if (request.method == HttpMethod::GET && m_url && m_url->equal_disregarding_fragment(request.url)) {
 		if (request.url.fragment == "") {
 			m_scroll = 0;
 		} else {
@@ -102,15 +104,31 @@ void Tab::load(HttpRequest request, bool alter_history) {
 				clamp_scroll();
 			}
 		}
+
+		m_url = request.url;
 	} else {
-		std::optional<std::string> body = m_connection_manager.request(request);
-		if (!body) {
+		auto response = m_browser.m_connection_manager.request(request, m_url);
+		if (!response) {
 			std::cerr << "Failed to load new document" << std::endl;
 			return;
 		}
 
+		m_allowed_origins = std::nullopt;
+
+		if (auto f = response->headers.find("content-security-policy"); f != response->headers.end()) {
+			auto const& csp = split(f->second, " ");
+			if (!csp.empty() && csp[0] == std::string_view{"default-src"}) {
+				m_allowed_origins = std::unordered_set<std::string>{};
+				for (size_t i = 1; i < csp.size(); i++) {
+					if (auto u = URL::create(csp[i])) {
+						m_allowed_origins->insert(u->origin());
+					}
+				}
+			}
+		}
+
 		m_scroll = 0;
-		m_nodes = HTMLParser(*body).parse();
+		m_nodes = HTMLParser(response->body).parse();
 		assert(m_nodes->type == NodeType::Element);
 		m_rules = m_default_style_sheet;
 		std::vector<std::shared_ptr<Node>> nodes;
@@ -152,12 +170,16 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
 					continue;
 				}
-				auto maybe_body = m_connection_manager.request(*style_url);
-				if (!maybe_body) {
+				if (!allowed_request(*style_url)) {
+					std::cerr << "Blocked stylesheet at: '" << access << "' due to CSP" << std::endl;
+					continue;
+				}
+				auto maybe_response = m_browser.m_connection_manager.request(*style_url, request.url);
+				if (!maybe_response) {
 					std::cerr << "Error fetching stylesheet at: '" << access << "'" << std::endl;
 					continue;
 				}
-				body = *maybe_body;
+				body = maybe_response->body;
 			} else {
 				body = access;
 			}
@@ -201,6 +223,9 @@ void Tab::load(HttpRequest request, bool alter_history) {
 			}
 		}
 
+		// URL must be initialized before javascript runs.
+		m_url = request.url;
+
 		if (m_js.has_value()) {
 			m_js.reset();
 		}
@@ -212,12 +237,16 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
 					continue;
 				}
-				auto code = m_connection_manager.request(*script_url);
+				if (!allowed_request(*script_url)) {
+					std::cerr << "Blocked script at: '" << access << "' due to CSP" << std::endl;
+					continue;
+				}
+				auto code = m_browser.m_connection_manager.request(*script_url, request.url);
 				if (!code) {
 					std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
 					continue;
 				}
-				if (!m_js->run(*code)) {
+				if (!m_js->run(code->body)) {
 					std::cerr << "Script " << *script_url << " crashed" << std::endl;;
 				}
 			} else {
@@ -230,8 +259,6 @@ void Tab::load(HttpRequest request, bool alter_history) {
 
 		render();
 	}
-
-	m_url = request.url;
 
 	if (alter_history) {
 		m_history.erase(m_history.begin() + m_history_index + 1, m_history.end());
@@ -254,7 +281,7 @@ std::optional<HttpRequest> Tab::submit_form(std::shared_ptr<Element> node) {
 		return std::nullopt;
 	}
 
-	auto url = m_url.resolve(node->attributes["action"]);
+	auto url = m_url->resolve(node->attributes["action"]);
 	if (!url) {
 		return std::nullopt;
 	}
@@ -310,7 +337,7 @@ void Tab::render() {
 	m_nodes->style(m_rules);
 	//print_node(*m_nodes);
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-	m_document->layout(m_font_cache);
+	m_document->layout(m_browser.m_font_cache);
 	//m_document->print_layout();
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
@@ -358,7 +385,11 @@ std::optional<std::string> Tab::title() {
 }
 
 URL const& Tab::url() const {
-	return m_url;
+	return *m_url;
+}
+
+bool Tab::allowed_request(URL const& url) const {
+	return m_allowed_origins == std::nullopt || m_allowed_origins->find(url.origin()) != m_allowed_origins->end();
 }
 
 void Tab::blur() {
@@ -475,16 +506,13 @@ std::optional<HttpRequest> Tab::click(float x, float y) {
 	if (objs.empty()) {
 		return std::nullopt;
 	}
-	// todo: this is a hack so we can only click on text/input elements AND so that we
-	// don't have to make a virtual function to get the current node from an element
-	// since BlockLayouts can have multiple nodes.
+	// Ignore block nodes. We don't really click on them meaninfully, so we don't have to accound for multiple nodes per layout.
+	auto elt_node = objs.back()->nodes()[0];
 	auto elt = [&]() -> std::shared_ptr<Element> {
-		if (auto text = dynamic_cast<TextLayout *>(&*objs.back())) {
-			return text->m_node->parent.lock();
-		} else if (auto input = dynamic_cast<InputLayout *>(&*objs.back())) {
-			return input->m_node->parent.lock();
+		if (elt_node->type == NodeType::Element) {
+			return std::static_pointer_cast<Element>(elt_node);
 		} else {
-			return nullptr;
+			return elt_node->parent.lock();
 		}
 	}();
 	if (elt) {
@@ -495,7 +523,7 @@ std::optional<HttpRequest> Tab::click(float x, float y) {
 			if (res.do_default) {
 				if (el->tag == "a") {
 					if (auto href = el->attributes.find("href"); href != el->attributes.end()) {
-						if (auto url = m_url.resolve(href->second)) {
+						if (auto url = m_url->resolve(href->second)) {
 							return *url;
 						}
 					}
@@ -529,21 +557,20 @@ void Tab::resize(int new_width, int new_height) {
 	m_width = new_width;
 	m_height = new_height;
 	m_document = std::make_shared<DocumentLayout>(m_nodes, m_width);
-	m_document->layout(m_font_cache);
+	m_document->layout(m_browser.m_font_cache);
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
 	clamp_scroll();
 
 }
 
-Tab::Tab(int width, int height, FontCache& font_cache)
+Tab::Tab(int width, int height, Browser& browser)
 	: m_width(width)
 	, m_height(height)
 	, m_default_style_sheet()
 	, m_document()
 	, m_display_list()
-	, m_connection_manager()
-	, m_font_cache(font_cache)
+	, m_browser(browser)
 {
 	StyleSheet default_style_sheet{};
 	if (auto css_string = read_entire_file_to_string("runtime_support/browser.css")) {
@@ -806,7 +833,7 @@ std::optional<std::unique_ptr<Browser>> Browser::create() {
 }
 
 void Browser::new_tab(HttpRequest request) {
-	auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom, m_font_cache);
+	auto new_tab = std::make_unique<Tab>(m_width, m_height - m_chrome.m_bottom, *this);
 	new_tab->load(request, true);
 	m_tabs.push_back(std::move(new_tab));
 	set_active_tab(m_tabs.size() - 1);

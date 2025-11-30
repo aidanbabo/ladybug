@@ -236,6 +236,11 @@ std::optional<URL> URL::resolve(std::string_view url_) const {
 	}
 }
 
+std::string URL::origin() const {
+	// todo: relative file messes this up, but who cares about Same-Origin on files?
+	return scheme + "://" + host + ":" + std::to_string(port);
+}
+
 bool URL::equal_disregarding_fragment(URL const& other) const {
 	return view_source == other.view_source && scheme == other.scheme && host == other.host && port == other.port && path == other.path;
 }
@@ -322,14 +327,6 @@ HttpRequest::HttpRequest(URL u, HttpMethod m, std::optional<std::string> p)
 	, method(m)
 	, payload(p)
 {}
-
-struct HttpResponse {
-	int status;
-	std::string version;
-	std::string explanation;
-	std::unordered_map<std::string, std::string> headers;
-	std::string body;
-};
 
 // todo: This class has a lot of asserts around reading and validating data.
 // Replacing these errors involves delving deeper into if they are:
@@ -449,7 +446,9 @@ public:
 		return m_ssl != nullptr;
 	}
 
-	std::optional<HttpResponse> request(HttpRequest const& request) {
+	// todo: reorganize parameters
+	// This should actually not use the referrer but the 'top-level site'.
+	std::optional<HttpResponse> request(HttpRequest const& request, std::optional<URL> referrer, std::unordered_map<std::string, std::pair<std::string, std::unordered_map<std::string, std::string>>> const& cookie_jar) {
 		std::string body{};
 		if (request.method == HttpMethod::GET) {
 			body += "GET " + request.url.path + " HTTP/1.1\r\n";;
@@ -464,6 +463,24 @@ public:
 		request_headers.push_back(std::make_pair("Connection", "keep-alive"));
 		request_headers.push_back(std::make_pair("User-Agent", "ladybug 1.0"));
 		request_headers.push_back(std::make_pair("Accept-Encoding", "gzip, deflate"));
+
+		if (auto finder = cookie_jar.find(request.url.host); finder != cookie_jar.end()) {
+			auto const& [cookie, params] = finder->second;
+			bool allow_cookie = true;
+			// todo: fixme: m_url is nullable just so we can support this branch. This stinks!
+			if (referrer) {
+				auto f = params.find("samesite");
+				if (f != params.end() && f->second == "lax") {
+					// This if has weird nesting in the book. I've learned not to mess with it as edits later will be more confusing.
+					if (request.method != HttpMethod::GET) {
+						allow_cookie = request.url.host == referrer->host;
+					}
+				}
+			}
+			if (allow_cookie) {
+				request_headers.push_back(std::make_pair("Cookie", std::string_view{cookie}));
+			}
+		}
 
 		if (request.method == HttpMethod::POST) {
 			assert(request.payload != std::nullopt);
@@ -815,17 +832,21 @@ struct CachedHttpResponse {
 ConnectionManager::ConnectionManager() = default;
 ConnectionManager::~ConnectionManager() = default;
 
-std::optional<std::string> ConnectionManager::request(HttpRequest const& request) {
-	std::optional<std::string> response;
+std::optional<HttpResponse> ConnectionManager::request(HttpRequest const& request, std::optional<URL> referrer) {
+	std::optional<HttpResponse> response;
 	if (request.url.scheme == "file") {
-		response = load_file(request.url);
+		if (auto b = load_file(request.url)) {
+			response = HttpResponse{};
+			response->body = *b;
+		}
 	} else if (request.url.scheme == "data") {
-		response = request.url.path;
+		response = HttpResponse{};
+		response->body = request.url.path;
 	} else if (request.url.scheme == "http" || request.url.scheme == "https") {
-		response = load_http_or_from_cache(request);
+		response = load_http_or_from_cache(request, referrer);
 	} else if (request.url.scheme == "about") {
 		if (request.url.host == "blank") {
-			response = "";
+			response = HttpResponse{};
 		} else {
 			std::cerr << "Unsupported about url" << std::endl;
 		}
@@ -834,10 +855,10 @@ std::optional<std::string> ConnectionManager::request(HttpRequest const& request
 	}
 
 	if (request.url.view_source && response) {
-		return escape(*response);
-	} else {
-		return response;
+		response->body = escape(response->body);
 	}
+
+	return response;
 }
 
 void ConnectionManager::print_active_connections() const {
@@ -850,7 +871,7 @@ std::optional<std::string> ConnectionManager::load_file(URL url) const {
 	return read_entire_file_to_string(url.path);
 }
 
-std::optional<std::string> ConnectionManager::try_load_from_cache(HttpRequest const& request) {
+std::optional<HttpResponse> ConnectionManager::try_load_from_cache(HttpRequest const& request) {
 	if (request.method != HttpMethod::GET) {
 		return std::nullopt;
 	}
@@ -861,7 +882,7 @@ std::optional<std::string> ConnectionManager::try_load_from_cache(HttpRequest co
 			m_cached_responses.erase(cached);
 		} else {
 			std::cerr << "Using cached response for " << cachable_url << std::endl;
-			return cached->second->response.body;
+			return cached->second->response;
 		}
 	}
 	return std::nullopt;
@@ -928,7 +949,7 @@ void ConnectionManager::store_in_cache_if_cachable(HttpRequest const& request, H
 	m_cached_responses.insert({cachable_url, std::move(cachable_response)});
 }
 
-std::optional<std::string> ConnectionManager::load_http_or_from_cache(HttpRequest request) {
+std::optional<HttpResponse> ConnectionManager::load_http_or_from_cache(HttpRequest request, std::optional<URL> referrer) {
 	// Redirect loop.
 	for (int i = 0; i < 10; i++) {
 		if (auto content = try_load_from_cache(request)) {
@@ -968,7 +989,7 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(HttpReques
 			return std::nullopt;
 		}
 
-		auto response = connection->request(request);
+		auto response = connection->request(request, referrer, m_cookie_jar);
 		if (!response) {
 			return std::nullopt;
 		}
@@ -977,6 +998,33 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(HttpReques
 			// save to keep alive
 		} else {
 			m_active_connections.erase(reusable_base);
+		}
+
+		if (auto cookie_finder = response->headers.find("set-cookie"); cookie_finder != response->headers.end()) {
+			auto& cookie { cookie_finder->second };
+			std::unordered_map<std::string, std::string> params;
+			if (cookie.find(';') != std::string::npos) {
+				auto v = split(cookie, ";");
+				cookie = v[0];
+				for (size_t i = 1; i < v.size(); i++) {
+					std::string key{}, value{};
+					auto n = v[i].find(';');
+					if (n == std::string::npos) {
+						key = v[i];
+						value = "true";
+					} else {
+						key = v[i].substr(0, n);
+						value = v[i].substr(n + 1);
+					}
+					key = trim_whitespace(key);
+					value = trim_whitespace(value);
+					make_lowercase(key);
+					make_lowercase(value);
+					params[key] = value;
+				}
+
+			}
+			m_cookie_jar[request.url.host] = std::make_pair(cookie, params);
 		}
 
 		store_in_cache_if_cachable(request, *response);
@@ -1000,7 +1048,7 @@ std::optional<std::string> ConnectionManager::load_http_or_from_cache(HttpReques
 			}
 		}
 
-		return response->body;
+		return response;
 	}
 
 	std::cout << "Too many redirects" << std::endl;

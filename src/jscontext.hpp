@@ -30,10 +30,12 @@ class JSContext {
 	static duk_ret_t duk_node_append_child(duk_context *ctx);
 	static duk_ret_t duk_node_insert_before(duk_context *ctx);
 	static duk_ret_t duk_node_remove_child(duk_context *ctx);
+	static duk_ret_t duk_xml_http_request_send(duk_context *ctx);
 
 	void inject_console(duk_context *ctx);
 	void inject_document(duk_context *ctx);
 	void extend_node(duk_context *ctx);
+	void extend_xml_http_request(duk_context *ctx);
 
 	int get_handle(std::shared_ptr<Node> const& n);
 public:

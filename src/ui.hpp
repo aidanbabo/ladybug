@@ -6,6 +6,7 @@
 #include "include/core/SkRect.h"
 
 #include <functional>
+#include <unordered_set>
 
 #include "draw.hpp"
 #include "network.hpp"
@@ -23,6 +24,8 @@ enum class HistoryNavigationAttempt {
 	Navigated,
 };
 
+class Browser;
+
 class Tab {
 	int m_width;
 	int m_height;
@@ -33,12 +36,14 @@ class Tab {
 	std::vector<std::shared_ptr<DrawCommand>> m_display_list{};
 	std::vector<HttpRequest> m_history{};
 	size_t m_history_index = -1;
-	ConnectionManager m_connection_manager;
 	int m_scroll = 0;
-	URL m_url = URL::ABOUT_BLANK;
+	std::optional<URL> m_url = std::nullopt;
 	std::shared_ptr<Element> m_focus;
 	std::optional<JSContext> m_js;
-	FontCache& m_font_cache;
+	Browser& m_browser;
+	// URL.origin()
+	std::optional<std::unordered_set<std::string>> m_allowed_origins;
+
 
 	friend class JSContext;
 
@@ -54,6 +59,8 @@ public:
 	std::optional<std::string> title();
 
 	URL const& url() const;
+
+	bool allowed_request(URL const& url) const;
 
 	void blur();
 
@@ -79,10 +86,8 @@ public:
 
 	void resize(int new_width, int new_height);
 
-	Tab(int width, int height, FontCache& font_cache);
+	Tab(int width, int height, Browser& browser);
 };
-
-class Browser;
 
 class Chrome {
 	int m_width;
@@ -169,6 +174,7 @@ class Browser {
 	SkImageInfo m_surface_info;
 	sk_sp<SkFontMgr> m_font_mgr;
 	FontCache m_font_cache;
+	ConnectionManager m_connection_manager;
 
 	std::vector<std::unique_ptr<Tab>> m_tabs{};
 	size_t m_active_tab{};
@@ -185,6 +191,8 @@ class Browser {
 
 	friend class Chrome;
 	friend class Alert;
+	friend class Tab;
+	friend class JSContext;
 
 public:
 	static std::optional<std::unique_ptr<Browser>> create();

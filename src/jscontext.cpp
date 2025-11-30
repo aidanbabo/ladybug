@@ -329,23 +329,18 @@ duk_ret_t JSContext::duk_node_remove_child(duk_context *ctx) {
 void JSContext::extend_node(duk_context *ctx) {
 	assert(duk_get_global_string(ctx, "Node"));
 	assert(duk_get_prop_string(ctx, -1, "prototype"));
-	duk_push_c_function(ctx, duk_node_get_attribute, 1);
-	duk_put_prop_string(ctx, -2, "getAttribute");
-
-	// we still have [node, proto]
 
 	duk_push_string(ctx, "innerHTML");
 	duk_push_c_function(ctx, duk_node_set_inner_html, 1);
-
 	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_SETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_SET_ENUMERABLE);
 
 	duk_push_string(ctx, "children");
 	duk_push_c_function(ctx, duk_node_children, 1);
-
 	duk_def_prop(ctx, -3, DUK_DEFPROP_HAVE_GETTER | DUK_DEFPROP_HAVE_ENUMERABLE | DUK_DEFPROP_SET_ENUMERABLE);
 
-	// we still have [node, proto]
-	
+	duk_push_c_function(ctx, duk_node_get_attribute, 1);
+	duk_put_prop_string(ctx, -2, "getAttribute");
+
 	duk_push_c_function(ctx, duk_node_append_child, 1);
 	duk_put_prop_string(ctx, -2, "appendChild");
 
@@ -355,7 +350,73 @@ void JSContext::extend_node(duk_context *ctx) {
 	duk_push_c_function(ctx, duk_node_remove_child, 1);
 	duk_put_prop_string(ctx, -2, "removeChild");
 
-	// we still have [node, proto]
+	duk_pop_2(ctx);
+}
+
+duk_ret_t JSContext::duk_xml_http_request_send(duk_context *ctx) {
+	char const* body_cstr = duk_get_string(ctx, -1);
+
+	duk_push_this(ctx);
+	duk_get_prop_string(ctx, -1, "url");
+	char const* url = duk_get_string(ctx, -1);
+	duk_pop(ctx);
+
+	duk_get_prop_string(ctx, -1, "method");
+	auto method_cstr = duk_get_string(ctx, -1);
+	duk_pop_2(ctx);
+
+	auto jsctx = get_js_context(ctx);
+
+	std::optional<std::string> body;
+	if (body_cstr) {
+		body = body_cstr;
+	}
+	if (url == nullptr) {
+		return DUK_RET_ERROR;
+	}
+	if (method_cstr == nullptr) {
+		return DUK_RET_ERROR;
+	}
+	std::string_view method_str { method_cstr };
+	HttpMethod method = HttpMethod::GET;
+	if (method_str == std::string_view{"GET"}) {
+	} else if (method_str == std::string_view{"POST"}) {
+		method = HttpMethod::POST;
+	} else {
+		return DUK_RET_ERROR;
+	}
+
+	auto full_url = jsctx->m_tab.m_url->resolve(url);
+	if (!full_url) {
+		return DUK_RET_ERROR;
+	}
+	if (full_url->origin() != jsctx->m_tab.m_url->origin()) {
+		// Same-Origin Policy
+		return DUK_RET_ERROR;
+	}
+
+	auto request = HttpRequest(*full_url, method, body);
+	if (!jsctx->m_tab.allowed_request(request.url)) {
+		// Cross-origin XHR blocked by CSP.
+		return DUK_RET_ERROR;
+	}
+
+	auto out = jsctx->m_tab.m_browser.m_connection_manager.request(request, jsctx->m_tab.m_url);
+	if (!out) {
+		return DUK_RET_ERROR;
+	}
+
+	duk_push_string(ctx, out->body.c_str());
+	return 1;
+
+}
+
+void JSContext::extend_xml_http_request(duk_context *ctx) {
+	assert(duk_get_global_string(ctx, "XMLHttpRequest"));
+	assert(duk_get_prop_string(ctx, -1, "prototype"));
+
+	duk_push_c_function(ctx, duk_xml_http_request_send, 1);
+	duk_put_prop_string(ctx, -2, "send");
 
 	duk_pop_2(ctx);
 }
