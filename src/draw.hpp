@@ -73,3 +73,27 @@ struct DrawRRect : public DrawCommand {
 	DrawRRect(SkRect rect, float radius, SkColor color);
 	~DrawRRect() = default;
 };
+
+struct Opacity : public DrawCommand {
+	float opacity;
+	std::vector<std::shared_ptr<DrawCommand>> children;
+
+	static std::shared_ptr<Opacity> create(float opacity, std::vector<std::shared_ptr<DrawCommand>> children);
+
+	void execute(SkCanvas& canvas) override;
+
+	Opacity(float opacity, std::vector<std::shared_ptr<DrawCommand>> children);
+	~Opacity() = default;
+};
+
+struct Blend : public DrawCommand {
+	SkBlendMode blend_mode;
+	std::vector<std::shared_ptr<DrawCommand>> children;
+
+	static std::shared_ptr<Blend> create(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children);
+
+	void execute(SkCanvas& canvas) override;
+
+	Blend(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children);
+	~Blend() = default;
+};

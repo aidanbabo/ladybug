@@ -141,6 +141,41 @@ static FontInfo font_info_from_node(Node const& node) {
 	};
 }
 
+static void paint_visual_effects(Element const& node, std::vector<std::shared_ptr<DrawCommand>>& commands, SkRect rect) {
+	float opacity = 1.0;
+	if (auto f = node.styles.find("opacity"); f != node.styles.end()) {
+		if (std::from_chars(f->second.data(), f->second.data() + f->second.size(), opacity).ec != std::errc{}) {
+			std::cerr << "Unable to parse opacity: " << f->second << std::endl;
+			opacity = 1.0;
+		}
+	}
+	std::string_view blend_mode = "";
+	if (auto f = node.styles.find("mix-blend-mode"); f != node.styles.end()) {
+		blend_mode = std::string_view{f->second};
+	}
+
+	std::string_view overflow = "visible";
+	if (auto f = node.styles.find("overflow"); f != node.styles.end()) {
+		overflow = f->second;
+	}
+	if (overflow == "clip") {
+		float border_radius = 0;
+		if (auto f = node.styles.find("border-radius"); f != node.styles.end()) {
+			if (auto p = parse_pixels(f->second)) {
+				border_radius = *p;
+			}
+		}
+		commands.push_back(Blend::create("destination-in", std::vector<std::shared_ptr<DrawCommand>>{
+			DrawRRect::create(rect, border_radius, SK_ColorWHITE),
+		}));
+	}
+
+	std::shared_ptr<DrawCommand> op = Opacity::create(opacity, std::move(commands));
+	auto blend = Blend::create(blend_mode, std::vector{op});
+	assert(commands.empty());
+	commands = { blend };
+}
+
 LayoutBase::LayoutBase(std::weak_ptr<LayoutBase> parent)
 	: m_parent(parent)
 {}
@@ -193,6 +228,9 @@ SkRect LayoutBase::self_rect() const {
 bool LayoutBase::should_paint() const {
 	return true;
 }
+
+void LayoutBase::paint_effects(std::vector<std::shared_ptr<DrawCommand>>&) const
+	{}
 
 InputLayout::InputLayout(std::shared_ptr<Element> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<LayoutBase> previous)
 	: LayoutBase(parent)
@@ -430,6 +468,12 @@ bool BlockLayout::should_paint() const {
 		auto el = static_cast<Element const&>(*n);
 		return el.tag != "input" && el.tag != "button";
 	});
+}
+
+void BlockLayout::paint_effects(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
+	if (m_nodes.size() == 1 && m_nodes[0]->type == NodeType::Element) {
+		paint_visual_effects(static_cast<Element const&>(*m_nodes[0]), commands, self_rect());
+	}
 }
 
 // todo: BlockLayout::layout can have multiple nodes
@@ -732,14 +776,23 @@ std::vector<std::shared_ptr<Node>> DocumentLayout::nodes() const {
 	return std::vector{m_node};
 }
 
-void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& commands) {
+void paint_tree(LayoutBase const& layout, std::vector<std::shared_ptr<DrawCommand>>& display_list) {
+	// todo: I don't really need this vector, I can just keep track of the index we start inserting at.
+	// This would prevent the copy at the end of the function in cases where no visual effects are applied?
+	// (we haven't written all that code yet)
+	std::vector<std::shared_ptr<DrawCommand>> cmds;
 	if (layout.should_paint()) {
-		layout.paint(commands);
+		layout.paint(cmds);
 	}
 
 	for (auto child : layout.m_children) {
-		paint_tree(*child, commands);
+		paint_tree(*child, cmds);
 	}
+
+	if (layout.should_paint()) {
+		layout.paint_effects(cmds);
+	}
+	std::copy(cmds.begin(), cmds.end(), std::back_inserter(display_list));
 }
 
 void layout_tree_to_list(std::shared_ptr<LayoutBase> node, std::vector<std::shared_ptr<LayoutBase>>& list) {

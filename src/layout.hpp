@@ -31,6 +31,7 @@ struct LayoutBase : public std::enable_shared_from_this<LayoutBase> {
 	explicit LayoutBase(std::weak_ptr<LayoutBase> parent);
 	virtual void layout(FontCache& font_cache) = 0;
 	virtual bool should_paint() const;
+	virtual void paint_effects(std::vector<std::shared_ptr<DrawCommand>>& commands) const;
 	virtual void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const = 0;
 	virtual std::vector<std::shared_ptr<Node>> nodes() const = 0;
 	void print_layout(int indent = 0) const;
@@ -90,6 +91,8 @@ public:
 	BlockLayout(std::vector<std::shared_ptr<Node>> node, std::shared_ptr<LayoutBase> parent, std::weak_ptr<BlockLayout> previous);
 	void layout(FontCache& font_cache) override;
 	bool should_paint() const override;
+	void paint_effects(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
+
 	void paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const override;
 	void print() const override;
 	std::vector<std::shared_ptr<Node>> nodes() const override;

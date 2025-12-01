@@ -175,6 +175,7 @@ bool CSSParser::shorthand_property_extras(std::unordered_map<std::string, std::s
 
 constexpr std::array<std::string_view, 1> SHORTHAND_PROPERTIES = { "font" };
 
+// todo: allow omission of trailing comma
 std::optional<std::unordered_map<std::string, std::string>> CSSParser::body() {
 	std::unordered_map<std::string, std::string> pairs;
 	while (m_i < m_s.size()) {

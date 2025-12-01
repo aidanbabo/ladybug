@@ -1,9 +1,16 @@
-<style>
-	div {
-		background-color: lightgreen;
-		border-radius: 5px;
-	}
-</style>
-<div>
+<div style="background-color: lightgreen; border-radius: 5px;">
 Background is rounded
+</div>
+
+<div style="color: white; background-color:orange;">
+    Parent
+    <div style="background-color: blue; mix-blend-mode: difference;">
+        Child
+    </div>
+    Parent
+</div>
+<div 
+  style="font-size:250%;border-radius:30px;background-color:lightblue;overflow:clip;">
+    This test text exists here to ensure that the "div" element is
+    large enough that the border radius is obvious.
 </div>

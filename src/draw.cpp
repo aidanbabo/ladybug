@@ -100,6 +100,12 @@ void DrawLine::execute(SkCanvas& canvas) {
 	// canvas.drawLine(SkPoint::Make(rect.fLeft, rect.fTop), SkPoint::Make(rect.fRight, rect.fBottom), paint);
 }
 
+DrawRRect::DrawRRect(SkRect rect, float radius, SkColor color)
+	: DrawCommand(rect)
+	, rrect(SkRRect::MakeRectXY(rect, radius, radius))
+	, color(color)
+{}
+
 std::shared_ptr<DrawRRect> DrawRRect::create(SkRect rect, float radius, SkColor color) {
 	return std::make_shared<DrawRRect>(rect, radius, color);
 }
@@ -107,12 +113,65 @@ std::shared_ptr<DrawRRect> DrawRRect::create(SkRect rect, float radius, SkColor 
 void DrawRRect::execute(SkCanvas& canvas) {
 	SkPaint paint;
 	paint.setColor(color);
-	// todo: did he forget the offset in the book?
 	canvas.drawRRect(rrect, paint);
 }
 
-DrawRRect::DrawRRect(SkRect rect, float radius, SkColor color)
-	: DrawCommand(rect)
-	, rrect(SkRRect::MakeRectXY(rect, radius, radius))
-	, color(color)
-{}
+Opacity::Opacity(float opacity, std::vector<std::shared_ptr<DrawCommand>> children)
+	: DrawCommand(SkRect::MakeEmpty())
+	, opacity(opacity)
+	, children(std::move(children))
+{
+	for (auto const& cmd : children) {
+		rect.join(cmd->rect);
+	}
+}
+
+std::shared_ptr<Opacity> Opacity::create(float opacity, std::vector<std::shared_ptr<DrawCommand>> children) {
+	return std::make_shared<Opacity>(opacity, std::move(children));
+}
+
+void Opacity::execute(SkCanvas& canvas) {
+	SkPaint paint;
+	paint.setAlphaf(opacity);
+	canvas.saveLayer(nullptr, &paint);
+	for (auto const& cmd : children) {
+		cmd->execute(canvas);
+	}
+	canvas.restore();
+}
+
+static SkBlendMode parse_blend_mode(std::string_view blend_mode) {
+	if (blend_mode == "multiply") {
+		return SkBlendMode::kMultiply;
+	} else if (blend_mode == "difference") {
+		return SkBlendMode::kDifference;
+	} else if (blend_mode == "destination-in") {
+		return SkBlendMode::kDstIn;
+	} else {
+		return SkBlendMode::kSrcOver;
+	}
+}
+
+Blend::Blend(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children)
+	: DrawCommand(SkRect::MakeEmpty())
+	, blend_mode(parse_blend_mode(blend_mode))
+	, children(std::move(children))
+{
+	for (auto const& cmd : children) {
+		rect.join(cmd->rect);
+	}
+}
+
+std::shared_ptr<Blend> Blend::create(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children) {
+	return std::make_shared<Blend>(blend_mode, std::move(children));
+}
+
+void Blend::execute(SkCanvas& canvas) {
+	SkPaint paint;
+	paint.setBlendMode(blend_mode);
+	canvas.saveLayer(nullptr, &paint);
+	for (auto const& cmd : children) {
+		cmd->execute(canvas);
+	}
+	canvas.restore();
+}
