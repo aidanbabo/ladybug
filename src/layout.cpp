@@ -149,7 +149,8 @@ static void paint_visual_effects(Element const& node, std::vector<std::shared_pt
 			opacity = 1.0;
 		}
 	}
-	std::string_view blend_mode = "";
+
+	std::optional<std::string_view> blend_mode;
 	if (auto f = node.styles.find("mix-blend-mode"); f != node.styles.end()) {
 		blend_mode = std::string_view{f->second};
 	}
@@ -159,20 +160,22 @@ static void paint_visual_effects(Element const& node, std::vector<std::shared_pt
 		overflow = f->second;
 	}
 	if (overflow == "clip") {
+		if (!blend_mode) {
+			blend_mode = "source-over";
+		}
 		float border_radius = 0;
 		if (auto f = node.styles.find("border-radius"); f != node.styles.end()) {
 			if (auto p = parse_pixels(f->second)) {
 				border_radius = *p;
 			}
 		}
-		commands.push_back(Blend::create("destination-in", std::vector<std::shared_ptr<DrawCommand>>{
+		commands.push_back(Blend::create(1.0, "destination-in", std::vector<std::shared_ptr<DrawCommand>>{
 			DrawRRect::create(rect, border_radius, SK_ColorWHITE),
 		}));
 	}
 
-	std::shared_ptr<DrawCommand> op = Opacity::create(opacity, std::move(commands));
-	auto blend = Blend::create(blend_mode, std::vector{op});
-	assert(commands.empty());
+	// todo: should we avoid creating the blend entirely if there is no blend_mode/opacity?
+	auto blend = Blend::create(opacity, blend_mode, std::move(commands));
 	commands = { blend };
 }
 

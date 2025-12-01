@@ -116,62 +116,50 @@ void DrawRRect::execute(SkCanvas& canvas) {
 	canvas.drawRRect(rrect, paint);
 }
 
-Opacity::Opacity(float opacity, std::vector<std::shared_ptr<DrawCommand>> children)
-	: DrawCommand(SkRect::MakeEmpty())
-	, opacity(opacity)
-	, children(std::move(children))
-{
-	for (auto const& cmd : children) {
-		rect.join(cmd->rect);
+// todo: upgrade to C++23 for .and_then
+static std::optional<SkBlendMode> parse_blend_mode(std::optional<std::string_view> blend_mode) {
+	if (!blend_mode.has_value()) {
+		return std::nullopt;
 	}
-}
 
-std::shared_ptr<Opacity> Opacity::create(float opacity, std::vector<std::shared_ptr<DrawCommand>> children) {
-	return std::make_shared<Opacity>(opacity, std::move(children));
-}
-
-void Opacity::execute(SkCanvas& canvas) {
-	SkPaint paint;
-	paint.setAlphaf(opacity);
-	canvas.saveLayer(nullptr, &paint);
-	for (auto const& cmd : children) {
-		cmd->execute(canvas);
-	}
-	canvas.restore();
-}
-
-static SkBlendMode parse_blend_mode(std::string_view blend_mode) {
 	if (blend_mode == "multiply") {
 		return SkBlendMode::kMultiply;
 	} else if (blend_mode == "difference") {
 		return SkBlendMode::kDifference;
 	} else if (blend_mode == "destination-in") {
 		return SkBlendMode::kDstIn;
+	} else if (blend_mode == "source-over") {
+		return SkBlendMode::kSrcOver;
 	} else {
 		return SkBlendMode::kSrcOver;
 	}
 }
 
-Blend::Blend(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children)
+Blend::Blend(float opacity, std::optional<std::string_view> blend_mode, std::vector<std::shared_ptr<DrawCommand>> children)
 	: DrawCommand(SkRect::MakeEmpty())
+	, opacity(opacity)
 	, blend_mode(parse_blend_mode(blend_mode))
 	, children(std::move(children))
 {
-	for (auto const& cmd : children) {
+	for (auto const& cmd : children)
 		rect.join(cmd->rect);
-	}
 }
 
-std::shared_ptr<Blend> Blend::create(std::string_view blend_mode, std::vector<std::shared_ptr<DrawCommand>> children) {
-	return std::make_shared<Blend>(blend_mode, std::move(children));
+std::shared_ptr<Blend> Blend::create(float opacity, std::optional<std::string_view> blend_mode, std::vector<std::shared_ptr<DrawCommand>> children) {
+	return std::make_shared<Blend>(opacity, blend_mode, std::move(children));
 }
 
 void Blend::execute(SkCanvas& canvas) {
 	SkPaint paint;
-	paint.setBlendMode(blend_mode);
-	canvas.saveLayer(nullptr, &paint);
-	for (auto const& cmd : children) {
+	paint.setAlphaf(opacity);
+	paint.setBlendMode(blend_mode.value_or(SkBlendMode::kSrcOver));
+
+	bool should_save = blend_mode.has_value() || opacity < 1;
+
+	if (should_save)
+		canvas.saveLayer(nullptr, &paint);
+	for (auto const& cmd : children)
 		cmd->execute(canvas);
-	}
-	canvas.restore();
+	if (should_save)
+		canvas.restore();
 }

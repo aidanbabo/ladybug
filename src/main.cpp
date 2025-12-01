@@ -6,7 +6,7 @@
 // todo: Exercise 5-4: Table of contents -> seems like not a real thing? maybe a real use case will appear later on?
 // todo: Exercise 5-6: Run-ins -> Browser support is already poor and the feature is too niche
 // todo: Exercise 6-9: !important -> Not interested
-// todo: Exercise 6-10: :has selectors -> Also not interested AND it would be slow AND maybe I could find a fast impl but i'm NOT interested
+// todo: Exercise 6-10: :has selectors -> Also not interested AND it would be slow AND maybe I could find a fast impl but I'm NOT interested
 // todo: Exercise 7-6: Search -> I don't want to add more URL parsing unless I must, because it's too close to a refactor
 // todo: Exercise 7-7: Visited links -> Not intersted in doing it in C++ or CSS
 // todo: Exercise 7-8: Bookmarks -> I don't want to design a web page in Skia or HTML with hooks
