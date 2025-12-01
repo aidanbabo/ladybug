@@ -33,6 +33,8 @@ std::shared_ptr<SkFont> FontCache::get_font(std::string_view name, size_t size, 
 	return get_font(info);
 }
 
+// todo: This code works... but we do have to preload fonts.
+// Check out the code in chapter 11 and try again with loading system fonts :(
 std::shared_ptr<SkFont> FontCache::get_font(FontInfo info) {
 	if (auto f = m_fonts.find(info); f != m_fonts.end()) {
 		return f->second;

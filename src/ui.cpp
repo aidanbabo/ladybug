@@ -1,3 +1,7 @@
+// todo: A better system for knowing what has changed. Now that we can render the tab and chrome separately
+// it would be nice to only do it once per change. Letting the browser be in charge of telling the Tab and chrome
+// about when to recalculate and raster would be ideal.
+
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
@@ -20,14 +24,13 @@
 
 #include "ui.hpp"
 
-static void initialize_texture(SDL_Renderer *renderer, int width, int height, SDL_Texture *&texture, sk_sp<SkSurface> &root_surface, SkImageInfo &info) {
-	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, width, height);
-
-	info = SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-	SkSurfaceProps surface_props;
+// todo: proper resize of chrome
+static void compute_surfaces(int width, int height, sk_sp<SkSurface>& root_surface, sk_sp<SkSurface>& chrome_surface, Chrome const& chrome) {
 	size_t row_bytes = width * 4;
-	root_surface = SkSurfaces::Raster(info, row_bytes, &surface_props);
+	root_surface = SkSurfaces::Raster(SkImageInfo::Make(width, height, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType), row_bytes, nullptr);
+	chrome_surface = SkSurfaces::Raster(SkImageInfo::Make(width, ceil(chrome.bottom()), kRGBA_8888_SkColorType, kUnpremul_SkAlphaType), row_bytes, nullptr);
 	assert(root_surface);
+	assert(chrome_surface);
 }
 
 static FontType load_fonts(
@@ -74,6 +77,8 @@ static std::string url_encode_parameters(std::vector<std::pair<std::string, std:
 
 // todo: I don't like how partially constructed a Tab object is, there is no need for m_url to be null just for
 // Cross-Site Requests
+// Ideally, we load a url into a tab at creation. I'm holding out on the book authors that there may be some reason
+// we aren't doing this.
 void Tab::load(HttpRequest request, bool alter_history) {
 	if (request.method == HttpMethod::GET && m_url && m_url->equal_disregarding_fragment(request.url)) {
 		if (request.url.fragment == "") {
@@ -343,24 +348,23 @@ void Tab::render() {
 	paint_tree(*m_document, m_display_list);
 }
 	
-void Tab::draw(SkCanvas *canvas, float offset) {
-	// content
+void Tab::raster(SkCanvas *canvas) {
 	for (auto command : m_display_list) {
-		if (command->rect.fTop > m_scroll + m_height) continue;
-		if (command->rect.fBottom < m_scroll) continue;
-		command->execute(m_scroll - offset, *canvas);
+		command->execute(*canvas);
 	}
 
 	// scrollbar
+	// todo: Reintroduce after compositing, probably not in this method.
+	/*
 	if (m_height < m_document->m_height) {
 		float scrollbar_ratio = (float) m_height / (float) m_document->m_height;
 		float scrollbar_size = scrollbar_ratio * (float) m_height;
 		float scrollbar_start = scrollbar_ratio * (float) m_scroll;
 		SkPaint paint;
 		paint.setColor(SK_ColorBLUE);
-		canvas->drawRect(SkRect::MakeLTRB(m_width - HSTEP, scrollbar_start + offset, m_width, scrollbar_start + scrollbar_size + offset), paint);
+		canvas->drawRect(SkRect::MakeLTRB(m_width - HSTEP, scrollbar_start, m_width, scrollbar_start + scrollbar_size), paint);
 	}
-
+	*/
 }
 
 std::optional<std::string> Tab::title() {
@@ -384,9 +388,11 @@ std::optional<std::string> Tab::title() {
 	}
 }
 
-URL const& Tab::url() const {
-	return *m_url;
-}
+URL const& Tab::url() const { return *m_url; }
+
+float Tab::document_height() const { return m_document->m_height; }
+
+float Tab::scroll() const { return m_scroll; }
 
 bool Tab::allowed_request(URL const& url) const {
 	return m_allowed_origins == std::nullopt || m_allowed_origins->find(url.origin()) != m_allowed_origins->end();
@@ -561,7 +567,6 @@ void Tab::resize(int new_width, int new_height) {
 	m_display_list.clear();
 	paint_tree(*m_document, m_display_list);
 	clamp_scroll();
-
 }
 
 Tab::Tab(int width, int height, Browser& browser)
@@ -627,6 +632,10 @@ void Chrome::backspace() {
 
 void Chrome::blur() {
 	m_focus = Focus::Nothing;
+}
+
+float Chrome::bottom() const {
+	return m_bottom;
 }
 
 void Chrome::enter(Browser& browser) {
@@ -791,20 +800,12 @@ void PopUp::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) {
 std::optional<std::unique_ptr<Browser>> Browser::create() {
 	int width = INITIAL_WIDTH;
 	int height = INITIAL_HEIGHT;
-	// todo: change to OpenGL
 	SDL_Window *window = SDL_CreateWindow("Ladybug", width, height, SDL_WINDOW_RESIZABLE);
 
 	if (window == nullptr) {
 		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not create window: %s\n", SDL_GetError());
 		return std::nullopt;
 	}
-
-	SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
-
-	SDL_Texture *texture;
-	SkImageInfo info;
-	sk_sp<SkSurface> root_surface;
-	initialize_texture(renderer, width, height, texture, root_surface, info);
 
 	sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_Custom_Directory("./fonts");
 	assert(font_mgr);
@@ -829,7 +830,11 @@ std::optional<std::unique_ptr<Browser>> Browser::create() {
 	font_cache.add_type("times", times_new_roman);
 	font_cache.add_type("courier new", courier_new);
 
-	return std::make_unique<Browser>(width, height, window, renderer, texture, root_surface, info, font_mgr, font_cache);
+	Chrome chrome(font_cache, width);
+	sk_sp<SkSurface> root_surface, chrome_surface;
+	compute_surfaces(width, height, root_surface, chrome_surface, chrome);
+
+	return std::make_unique<Browser>(width, height, window, root_surface, chrome_surface, nullptr, font_mgr, font_cache, std::move(chrome));
 }
 
 void Browser::new_tab(HttpRequest request) {
@@ -837,11 +842,14 @@ void Browser::new_tab(HttpRequest request) {
 	new_tab->load(request, true);
 	m_tabs.push_back(std::move(new_tab));
 	set_active_tab(m_tabs.size() - 1);
+	raster_chrome();
+	raster_tab();
 	draw();
 }
 
 void Browser::set_active_tab(size_t index) {
 	m_active_tab = index;
+	m_tab_surface = nullptr;
 	set_window_title();
 }
 
@@ -853,18 +861,52 @@ void Browser::set_window_title() {
 	}
 }
 
+void Browser::raster_chrome() {
+	auto canvas = m_chrome_surface->getCanvas();
+	canvas->clear(SK_ColorWHITE);
+
+	std::vector<std::shared_ptr<DrawCommand>> chrome_draws;
+	m_chrome.paint(*this, chrome_draws);
+	for (auto const& cmd : chrome_draws) {
+		cmd->execute(*canvas);
+	}
+}
+
+void Browser::raster_tab() {
+	int tab_height = ceil(m_tabs[m_active_tab]->document_height() + 2 * VSTEP);
+
+	if (!m_tab_surface || tab_height != m_tab_surface->height()) {
+		size_t row_bytes = m_width * 4;
+		m_tab_surface = SkSurfaces::Raster(SkImageInfo::Make(m_width, tab_height, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType), row_bytes, nullptr);
+	}
+
+	auto canvas = m_tab_surface->getCanvas();
+	canvas->clear(SK_ColorWHITE);
+
+	m_tabs[m_active_tab]->raster(canvas);
+}
+
 void Browser::draw() {
 	auto canvas = m_root_surface->getCanvas();
 	canvas->clear(SK_ColorWHITE);
 
-	m_tabs[m_active_tab]->draw(canvas, m_chrome.m_bottom);
-	
-	std::vector<std::shared_ptr<DrawCommand>> chrome_draws;
-	m_chrome.paint(*this, chrome_draws);
-	for (auto const& cmd : chrome_draws) {
-		cmd->execute(0, *canvas);
-	}
+	// todo: why do we render the tab content behind the chrome?, why not skip it?
+	auto tab_rect = SkRect::MakeLTRB(0, m_chrome.bottom(), m_width, m_height);
+	float tab_offset = m_chrome.bottom() - m_tabs[m_active_tab]->scroll();
+	canvas->save();
+	canvas->clipRect(tab_rect);
+	canvas->translate(0, tab_offset);
+	m_tab_surface->draw(canvas, 0, 0);
+	canvas->restore();
 
+	auto chrome_rect = SkRect::MakeLTRB(0, 0, m_width, m_chrome.bottom());
+	canvas->save();
+	canvas->clipRect(chrome_rect);
+	m_chrome_surface->draw(canvas, 0, 0);
+	canvas->restore();
+
+	// todo: after compositing introduce this again
+	/*
 	if (m_popup) {
 		std::vector<std::shared_ptr<DrawCommand>> popup_draws;
 		m_popup->paint(popup_draws);
@@ -872,33 +914,47 @@ void Browser::draw() {
 			cmd->execute(0, *canvas);
 		}
 	}
+	*/
 
 	sk_sp<SkImage> image = m_root_surface->makeImageSnapshot();
-
 	size_t row_bytes = m_width * 4;
-
 	std::vector<uint8_t> pixels(m_height * m_width * 4);
-	if (!image->readPixels(m_surface_info, pixels.data(), row_bytes, 0, 0)) {
+	if (!image->readPixels(m_root_surface->imageInfo(), pixels.data(), row_bytes, 0, 0)) {
 		assert(false);
 	}
 
+	auto sdl_surface = SDL_CreateSurfaceFrom(m_width, m_height, SDL_PIXELFORMAT_RGBA32, pixels.data(), row_bytes);
+	auto rect = SDL_Rect{0, 0, m_width, m_height};
+	auto window_surface = SDL_GetWindowSurface(m_window);
+	SDL_BlitSurface(sdl_surface, &rect, window_surface, &rect);
+	SDL_UpdateWindowSurface(m_window);
+
+	SDL_DestroySurface(sdl_surface);
+
+	/*
+	// todo: The code was must faster when we rendered with a renderer and no blit
+	// we can wait to see if we get this sort of optimization back or if this is
+	// going to be a C++ specific thing.
+	// todo: test new code for memory leaks
 	SDL_UpdateTexture(m_texture, nullptr, pixels.data(), row_bytes);
 
 	SDL_RenderClear(m_renderer);
 	SDL_RenderTexture(m_renderer, m_texture, nullptr, nullptr);
 	SDL_RenderPresent(m_renderer);
+	*/
 }
 
 void Browser::resize(int new_width, int new_height) {
 	m_width = new_width;
 	m_height = new_height;
-	SDL_DestroyTexture(m_texture);
 
-	initialize_texture(m_renderer, m_width, m_height, m_texture, m_root_surface, m_surface_info);
+	compute_surfaces(m_width, m_height, m_root_surface, m_chrome_surface, m_chrome);
 
 	for (auto& tab : m_tabs) {
 		tab->resize(new_width, new_height);
 	}
+	raster_chrome();
+	raster_tab();
 	draw();
 }
 
@@ -915,13 +971,16 @@ void Browser::scroll_down() {
 void Browser::handle_click(ClickType type, float x, float y) {
 	if (m_focus == Focus::Alert) {
 		m_popup->click(*this, x, y);
+		// raster_popup();
 	} else if (y < m_chrome.m_bottom) {
 		m_focus = Focus::Chrome;
 		m_tabs[m_active_tab]->blur();
 		m_tabs[m_active_tab]->render();
 		if (type == ClickType::Left) {
 			m_chrome.click(*this, x, y);
+			raster_tab();
 		}
+		raster_chrome();
 	} else {
 		m_focus = Focus::Content;
 		m_chrome.blur();
@@ -935,8 +994,10 @@ void Browser::handle_click(ClickType type, float x, float y) {
 					new_tab(*request);
 				}
 				set_window_title();
+				raster_chrome();
 			}
 		}
+		raster_tab();
 	}
 	draw();
 }
@@ -963,11 +1024,14 @@ void Browser::handle_key(SDL_KeyboardEvent event) {
 			char c = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
 			m_chrome.keypress(c);
 		}
+		raster_chrome();
 	} else if (m_focus == Focus::Content) {
 		auto navigation = m_tabs[m_active_tab]->keypress(event);
 		if (navigation) {
 			m_tabs[m_active_tab]->load(*navigation, true);
+			raster_chrome();
 		}
+		raster_tab();
 	} else {
 		assert(false && "unreachable");
 	}
@@ -1006,8 +1070,6 @@ void Browser::navigation_confirmation_popup(bool going_back) {
 }
 
 void Browser::destroy() {
-	SDL_DestroyTexture(m_texture);
-	SDL_DestroyRenderer(m_renderer);
 	SDL_DestroyWindow(m_window);
 }
 
@@ -1015,23 +1077,22 @@ Browser::Browser(
 	int width,
 	int height,
 	SDL_Window *window,
-	SDL_Renderer *renderer,
-	SDL_Texture *texture,
 	sk_sp<SkSurface> root_surface,
-	SkImageInfo surface_info,
+	sk_sp<SkSurface> chrome_surface,
+	sk_sp<SkSurface> tab_surface,
 	sk_sp<SkFontMgr> font_mgr,
-	FontCache font_cache
+	FontCache font_cache,
+	Chrome chrome
 )
 	: m_width(width)
 	, m_height(height)
 	, m_window(window)
-	, m_renderer(renderer)
-	, m_texture(texture)
 	, m_root_surface(root_surface)
-	, m_surface_info(surface_info)
+	, m_chrome_surface(chrome_surface)
+	, m_tab_surface(tab_surface)
 	, m_font_mgr(font_mgr)
 	, m_font_cache(font_cache)
-	, m_chrome(font_cache, width)
+	, m_chrome(chrome)
 {}
 
 Browser::~Browser() = default;

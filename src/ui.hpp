@@ -54,11 +54,13 @@ public:
 
 	void render();
 	
-	void draw(SkCanvas *canvas, float offset);
+	void raster(SkCanvas *canvas);
 
 	std::optional<std::string> title();
 
 	URL const& url() const;
+	float document_height() const;
+	float scroll() const;
 
 	bool allowed_request(URL const& url) const;
 
@@ -129,6 +131,7 @@ public:
 	void backspace();
 
 	void blur();
+	float bottom() const;
 
 	void enter(Browser& browser);
 	void click(Browser& browser, float x, float y);
@@ -168,10 +171,11 @@ class Browser {
 	int m_width;
 	int m_height;
 	SDL_Window *m_window;
-	SDL_Renderer *m_renderer;
-	SDL_Texture *m_texture;
 	sk_sp<SkSurface> m_root_surface;
-	SkImageInfo m_surface_info;
+	sk_sp<SkSurface> m_chrome_surface;
+	sk_sp<SkSurface> m_tab_surface;
+	// todo: popup surface?
+	// sk_sp<SkSurface> m_popup_surface;
 	sk_sp<SkFontMgr> m_font_mgr;
 	FontCache m_font_cache;
 	ConnectionManager m_connection_manager;
@@ -203,16 +207,16 @@ public:
 
 	void set_window_title();
 
+	void raster_chrome();
+	void raster_tab();
 	void draw();
 
 	void resize(int new_width, int new_height);
 
 	void scroll_up();
-
 	void scroll_down();
 
 	void handle_click(ClickType type, float x, float y);
-
 	void handle_key(SDL_KeyboardEvent event);
 
 	void navigation_confirmation_popup(bool going_back);
@@ -223,11 +227,11 @@ public:
 		int width,
 		int height,
 		SDL_Window *window,
-		SDL_Renderer *renderer,
-		SDL_Texture *texture,
 		sk_sp<SkSurface> root_surface,
-		SkImageInfo surface_info,
+		sk_sp<SkSurface> chrome_surface,
+		sk_sp<SkSurface> tab_surface,
 		sk_sp<SkFontMgr> font_mgr,
-		FontCache font_cache);
+		FontCache font_cache,
+		Chrome chrome);
 	~Browser();
 };

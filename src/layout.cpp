@@ -55,15 +55,18 @@ static std::optional<SkColor> parse_color(std::string_view color) {
 		{ "black", SK_ColorBLACK },
 		{ "red", SK_ColorRED },
 		{ "blue", SK_ColorBLUE },
-		{ "gray", SK_ColorGRAY },
-		{ "grey", SK_ColorGRAY },
-		{ "lightgray", SK_ColorLTGRAY },
-		{ "lightgrey", SK_ColorLTGRAY },
+		{ "green", SkColorSetRGB(0x00, 0x80, 0x00) },
 		{ "lightblue", SkColorSetRGB(0xad, 0xd8, 0xe6) },
+		{ "lightgreen", SkColorSetRGB(0x90, 0xEE, 0x90) },
+		{ "orange", SkColorSetRGB(0xff, 0xa5, 0x00) },
+		{ "orangered", SkColorSetRGB(0xff, 0x45, 0x00) },
+		{ "gray", SkColorSetRGB(0x80, 0x80, 0x80) },
+		{ "grey", SkColorSetRGB(0x80, 0x80, 0x80) },
+		{ "lightgray", SkColorSetRGB(0xd3, 0xd3, 0xd3) },
+		{ "lightgrey", SkColorSetRGB(0xd3, 0xd3, 0xd3) },
 		{ "yellow", SK_ColorYELLOW },
 		{ "magenta", SK_ColorMAGENTA },
-		// todo: not orange lol
-		{ "orange", SkColorSetRGB(0xff, 0xff, 0x00) },
+		// colors below this comment have not been checked for compatibility with CSS
 	};
 
 	if (auto c = COLOR_NAMES.find(color); c != COLOR_NAMES.end()) {
@@ -88,6 +91,25 @@ static std::optional<float> parse_pixels(std::string_view s) {
 		return std::nullopt;
 	}
 	return pixels;
+}
+
+static std::optional<std::shared_ptr<DrawCommand>> background_draw_command(Element const& node, SkRect rect) {
+	auto bgcolor_iter = node.styles.find("background-color");
+	std::string_view bgcolor { (bgcolor_iter != node.styles.end()) ? bgcolor_iter->second : "transparent" };
+	if (bgcolor != "transparent") {
+		auto color = parse_color(bgcolor);
+		if (color) {
+			float radius = 0;
+			if (auto f = node.styles.find("border-radius"); f != node.styles.end()) {
+				if (auto p = parse_pixels(f->second)) {
+					radius = *p;
+				}
+			}
+			auto out = DrawRRect::create(rect, radius, *color);
+			return out;
+		}
+	}
+	return std::nullopt;
 }
 
 static FontInfo font_info_from_node(Node const& node) {
@@ -205,20 +227,14 @@ void InputLayout::layout(FontCache& font_cache) {
 	} else {
 		SkFontMetrics m;
 		m_font->getMetrics(&m);
-		m_height = m.fDescent - m.fAscent; // todo: should be linespace
+		m_height = m.fDescent - m.fAscent;
 	}
 
 }
 
 void InputLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
-	auto bgcolor_iter = m_node->styles.find("background-color");
-	std::string_view bgcolor { (bgcolor_iter != m_node->styles.end()) ? bgcolor_iter->second : "transparent" };
-	if (bgcolor != "transparent") {
-		auto color = parse_color(bgcolor);
-		if (color) {
-			auto rect = DrawRect::create(self_rect(), *color);
-			commands.push_back(rect);
-		}
+	if (auto bg = background_draw_command(*m_node, self_rect())) {
+		commands.push_back(*bg);
 	}
 
 	if (m_node->type == NodeType::Text) {
@@ -249,6 +265,7 @@ void InputLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 	}
 
 	auto color_str { m_node->styles["color"] };
+	// todo: should be inherited
 	auto color { parse_color(color_str).value_or(SK_ColorBLACK) };
 	auto cmd { DrawText::create(m_x, m_y, m_width, m_height, text, m_font, color) };
 	commands.push_back(cmd);
@@ -289,12 +306,12 @@ void TextLayout::layout(FontCache& font_cache) {
 
 	SkFontMetrics m;
 	m_font->getMetrics(&m);
-	m_height = m.fDescent - m.fAscent; // todo: should be linespace
-
+	m_height = m.fDescent - m.fAscent;
 }
 
 void TextLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) const {
 	auto color_str { m_node->styles["color"] };
+	// todo: should be inherited
 	auto color { parse_color(color_str).value_or(SK_ColorBLACK) };
 	auto cmd { DrawText::create(m_x, m_y, m_width, m_height, m_word, m_font, color) };
 	commands.push_back(cmd);
@@ -521,14 +538,8 @@ void BlockLayout::paint(std::vector<std::shared_ptr<DrawCommand>>& commands) con
 	for (auto const& node : m_nodes) {
 		if (node->type == NodeType::Element) {
 			auto element = static_cast<Element const&>(*node);
-			auto bgcolor_iter = element.styles.find("background-color");
-			std::string bgcolor = (bgcolor_iter != element.styles.end()) ? bgcolor_iter->second : std::string{ "transparent" };
-			if (bgcolor != "transparent") {
-				auto color = parse_color(bgcolor);
-				if (color) {
-					auto rect = DrawRect::create(self_rect(), *color);
-					commands.push_back(rect);
-				}
+			if (auto bg = background_draw_command(element, self_rect())) {
+				commands.push_back(*bg);
 			}
 
 			if (element.tag == "li") {

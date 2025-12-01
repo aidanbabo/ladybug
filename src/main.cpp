@@ -33,6 +33,8 @@
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 // todo: fixme: our preventDefault implementation also prevents further proper propagation in the event of navigation
 
+// todo: split into more files. (incremental) build time is wild in this language
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
@@ -48,47 +50,20 @@
 #include "ui.hpp"
 #include "network.hpp"
 
-int main(int argc, char** argv) {
-
-	bool done = false;
-
-	SDL_Init(SDL_INIT_VIDEO);
-
-	auto b = Browser::create();
-	if (!b.has_value()) {
-		SDL_Quit();
-		return 1;
-	}
-	auto browser = std::move(*b);
-
-	network_init();
-
-	URL url = [&] {
-		if (argc == 1) {
-			return URL::create("file:./test_data/index.html").value_or(URL::ABOUT_BLANK);
-		} else if (argc == 2) {
-			return URL::create(argv[1]).value_or(URL::ABOUT_BLANK);
-		} else {
-			assert(false && "Invalid arguments");
-		}
-	}();
-
-	auto begin = std::chrono::steady_clock::now();
-	browser->new_tab(url);
-	auto end = std::chrono::steady_clock::now();
-	std::cout << "Page loaded in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "ms" << std::endl;
-
-	while (!done) {
+void mainloop(std::unique_ptr<Browser> browser) {
+	for (;;) {
 		SDL_Event event;
-
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_EVENT_QUIT) {
-				done = true;
+				browser->destroy();
+				SDL_Quit();
+				return;
 			} else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
 				int width = event.window.data1;
 				int height = event.window.data2;
 				browser->resize(width, height);
 			} else if (event.type == SDL_EVENT_KEY_DOWN) {
+				// todo: ? They use SDL_EVENT_TEXTINPUT here, which we have to opt in to in SDL3.
 				browser->handle_key(event.key);
 			} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
 				// todo: smooth scrolling
@@ -107,13 +82,38 @@ int main(int argc, char** argv) {
 				}
 			}
 		}
-
 		SDL_Delay(16);
 	}
+}
 
-	browser->destroy();
+int main(int argc, char** argv) {
+	URL url = [&] {
+		if (argc == 1) {
+			return URL::create("file:./test_data/index.html").value_or(URL::ABOUT_BLANK);
+		} else if (argc == 2) {
+			return URL::create(argv[1]).value_or(URL::ABOUT_BLANK);
+		} else {
+			assert(false && "Invalid arguments");
+		}
+	}();
 
-	SDL_Quit();
+	SDL_Init(SDL_INIT_VIDEO);
+	// todo: look into SDL_SetAppMetadata
 
+	auto b = Browser::create();
+	if (!b.has_value()) {
+		SDL_Quit();
+		return 1;
+	}
+	auto browser = std::move(*b);
+
+	network_init();
+
+	auto begin = std::chrono::steady_clock::now();
+	browser->new_tab(url);
+	auto end = std::chrono::steady_clock::now();
+	std::cout << "Page loaded in " << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "ms" << std::endl;
+
+	mainloop(std::move(browser));
 	return 0;
 }
