@@ -19,9 +19,9 @@ System dependencies: `zlib`, `libssl`, `libcrypto`.
 ## Source
 This browsers follows along with the tutorial at [https://browser.engineering](). This resource was recommended by the fine fellows who write the Ladybird browser (hence the name ladybug) to understand how a browser works.
 
-The book's browser is written in Python, initially with Tkinter and later with Skia and SDL. I'm writing it in C++20 (unless C++23 turns out to be much better) with Skia and SDL3. If you're seeing a little bit of awkwardness with rendering and ignored errors, there is a chance I'm waiting for the tutorials to reach the point where they use Skia as well so that code can match up better. A small chance ;-;.
+The book's browser is written in Python, initially with Tkinter and later with Skia and SDL. I'm writing it in C++20 (unless C++23 turns out to be much better) with Skia and SDL3.
 
-Some of the exercises have been done, only the ones I find technically interesting or are huge usability improvements.
+Some of the exercises have been done, only the ones I find technically interesting or are huge usability improvements. Additionally, exercises may be skipped due to code complexity, which reduces the ability to follow along with large refactors to the codebase. They are skipped and will be done after the codebase is in its "final form".
 
 ## Capabilities
 - Fetch an HTML document over HTTP or HTTPS.
@@ -43,3 +43,4 @@ Some of the exercises have been done, only the ones I find technically interesti
     - createElement, addChild, insertBefore
     - addEventListener, preventDefault, stopPropagation
 - Supports cookies and protects from XSS attacks with SameSite and simple CSP (default-src)
+- Supports simple visual effects like transparency and blending.

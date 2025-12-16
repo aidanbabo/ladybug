@@ -29,6 +29,10 @@
 // todo: Exercise 10-4: Cookie Expiration -> Networking needs an overhaul I'm putting off
 // todo: Exercise 10-5: Cross-origin resource sharing (CORS) -> Networking needs an overhaul I'm putting off
 // todo: Exercise 10-6: Referer -> I think this is a bad idea! I may implement it so the default behavior is no referrer, but also network stack yatta yatta
+//
+// At this point, non skipped exercises are getting a mention
+//
+// todo: Chapter 11 Exercises
 
 // todo: reimplement <sup> (and then maybe <sub>?) now that we are using stylesheets instead of code
 // todo: fixme: our preventDefault implementation also prevents further proper propagation in the event of navigation
