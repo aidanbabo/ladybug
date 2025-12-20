@@ -421,6 +421,48 @@ void JSContext::extend_xml_http_request(duk_context *ctx) {
 	duk_pop_2(ctx);
 }
 
+struct SetTimeoutUserData {
+	JSContext& jsctx;
+	int handle;
+
+	SetTimeoutUserData(JSContext& jsctx, int handle)
+		: jsctx(jsctx)
+		, handle(handle)
+	{}
+};
+
+Uint32 JSContext::set_timeout_callback(void *userdata, SDL_TimerID timer_id, Uint32) {
+	SetTimeoutUserData *ud = (SetTimeoutUserData *)userdata;
+	ud->jsctx.m_tab.m_task_runner.schedule_js(ud->jsctx, std::nullopt, std::format("__runSetTimeout({})", ud->handle));
+	ud->jsctx.m_timers.erase(timer_id);
+	delete ud;
+	return 0;
+}
+
+duk_ret_t JSContext::duk_internal_set_timeout(duk_context *ctx) {
+
+	int handle = duk_get_int_default(ctx, -2, -1);
+	if (handle == -1) return DUK_RET_TYPE_ERROR;
+	int interval = duk_get_int_default(ctx, -1, -1);
+	if (interval == -1) return DUK_RET_TYPE_ERROR;
+
+	auto jsctx = get_js_context(ctx);
+
+	void *userdata = new SetTimeoutUserData(*jsctx, handle);
+	SDL_TimerID tid = SDL_AddTimer(interval, set_timeout_callback, userdata);
+	jsctx->m_timers.insert(tid);
+	return 0;
+}
+
+void JSContext::inject_internal(duk_context *ctx) {
+	duk_push_global_object(ctx);
+	duk_push_object(ctx);
+	duk_push_c_function(ctx, duk_internal_set_timeout, 2);
+	duk_put_prop_string(ctx, -2, "setTimeout");
+	duk_put_prop_string(ctx, -2, "__internal");
+	duk_pop(ctx);
+}
+
 int JSContext::get_handle(std::shared_ptr<Node> const& n) {
 	int handle;
 	if (auto e = m_node_to_handle.find(n); e != m_node_to_handle.end()) {
@@ -433,7 +475,12 @@ int JSContext::get_handle(std::shared_ptr<Node> const& n) {
 	return handle;
 }
 
-JSContext::JSContext(Tab& tab) : m_tab(tab) {
+JSContext::JSContext(Tab& tab)
+	: m_tab(tab)
+	, m_node_to_handle()
+	, m_handle_to_node()
+	, m_timers()
+{
 	m_interp = duk_create_heap_default();
 	if (!m_interp) {
 		std::cerr << "Unable to create JS context" << std::endl;
@@ -452,16 +499,31 @@ JSContext::JSContext(Tab& tab) : m_tab(tab) {
 	extend_node(m_interp);
 	inject_console(m_interp);
 	inject_document(m_interp);
+	inject_internal(m_interp);
 }
 
 JSContext::~JSContext() {
 	duk_destroy_heap(m_interp);
+	for (int tid : m_timers) {
+		// Opt for removing timers on destruction than a "destroyed" flag.
+		// This works better for C++.
+		SDL_RemoveTimer(tid);
+	}
 }
 
-bool JSContext::run(std::string_view code) {
+void JSContext::run(std::string_view code, std::optional<URL> script_url) {
+	// todo: duk_pcompile_string_filename
+	int result = duk_peval_lstring_noresult(m_interp, code.data(), code.size());
+	
 	// todo: use result, keep error around so we can report it
-	// duk_pcompile_string_filename
-	return duk_peval_lstring_noresult(m_interp, code.data(), code.size()) == 0;
+	if (result == 0) {
+		return;
+	}
+	if (script_url) {
+		std::cerr << "Script " << *script_url << " crashed" << std::endl;;
+	} else {
+		std::cerr << "Inline script crashed" << std::endl;;
+	}
 }
 
 EventDispatchResult JSContext::dispatch_event(std::string_view type, std::shared_ptr<Element> el) {

@@ -13,6 +13,7 @@
 #include "parsers.hpp"
 #include "layout.hpp"
 #include "jscontext.hpp"
+#include "task_runner.hpp"
 
 int const INITIAL_WIDTH  = 800;
 int const INITIAL_HEIGHT = 600;
@@ -43,6 +44,7 @@ class Tab {
 	Browser& m_browser;
 	// URL.origin()
 	std::optional<std::unordered_set<std::string>> m_allowed_origins;
+	TaskRunner m_task_runner;
 
 
 	friend class JSContext;
@@ -79,6 +81,8 @@ public:
 	void scroll_up();
 
 	void scroll_down();
+
+	void run_task();
 
 	[[nodiscard]]
 	std::optional<HttpRequest> keypress(SDL_KeyboardEvent event);
@@ -220,6 +224,8 @@ public:
 	void handle_key(SDL_KeyboardEvent event);
 
 	void navigation_confirmation_popup(bool going_back);
+
+	void run_task();
 
 	void destroy();
 

@@ -251,13 +251,9 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
 					continue;
 				}
-				if (!m_js->run(code->body)) {
-					std::cerr << "Script " << *script_url << " crashed" << std::endl;;
-				}
+				m_task_runner.schedule_js(*m_js, script_url, code->body);
 			} else {
-				if (!m_js->run(access)) {
-					std::cerr << "Inline script crashed" << std::endl;;
-				}
+				m_task_runner.schedule_js(*m_js, std::nullopt, access);
 			}
 
 		}
@@ -464,6 +460,10 @@ void Tab::scroll_down() {
 	clamp_scroll();
 }
 
+void Tab::run_task() {
+	m_task_runner.run();
+}
+
 [[nodiscard]]
 std::optional<HttpRequest> Tab::keypress(SDL_KeyboardEvent event) {
 	if (m_focus != nullptr) {
@@ -576,6 +576,7 @@ Tab::Tab(int width, int height, Browser& browser)
 	, m_document()
 	, m_display_list()
 	, m_browser(browser)
+	, m_task_runner(*this)
 {
 	StyleSheet default_style_sheet{};
 	if (auto css_string = read_entire_file_to_string("runtime_support/browser.css")) {
@@ -1067,6 +1068,10 @@ void Browser::navigation_confirmation_popup(bool going_back) {
 	}
 
 	m_popup = PopUp(m_font_cache, m_width, prompts, options, actions);
+}
+
+void Browser::run_task() {
+	m_tabs[m_active_tab]->run_task();
 }
 
 void Browser::destroy() {

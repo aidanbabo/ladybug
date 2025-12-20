@@ -10,6 +10,11 @@
 		function huh() {
 			return "huh";
 		}
+		try {
+			setTimeout(function() { console.log("hello from a timeout"); }, 15000);
+		} catch (e) {
+			console.log(e);
+		}
 	</script>
 </head>
 <!-- Default page rendered with no arguments -->

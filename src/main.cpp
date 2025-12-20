@@ -86,6 +86,7 @@ void mainloop(std::unique_ptr<Browser> browser) {
 				}
 			}
 		}
+		browser->run_task();
 		SDL_Delay(16);
 	}
 }
