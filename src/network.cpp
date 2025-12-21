@@ -16,7 +16,6 @@
 #include <array>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <unordered_map>
 
 #include "network.hpp"
@@ -26,294 +25,6 @@ void network_init() {
 	SSL_library_init();
 	SSL_load_error_strings();
 	OpenSSL_add_all_algorithms();
-}
-
-std::string url_encode(std::string_view s) {
-	std::string out;
-	for (char c : s) {
-		if (!std::isalnum(c) && c != '-' && c != '_' && c !='.' && c != '~') {
-			out.push_back('%');
-			std::stringstream ss;
-			ss << std::hex << (int) c;
-			std::string t = ss.str();
-			std::transform(t.begin(), t.end(), t.begin(), ::toupper);
-			out.append(t);
-		} else {
-			out.push_back(c);
-		}
-	}
-	return out;
-}
-
-static std::optional<URL> parse_data_url(bool view_source, std::string scheme, std::string_view string) {
-	size_t n = string.find(",");
-	if (n == std::string::npos) {
-		std::cerr << "Expected ',' in data url" << std::endl;
-		return std::nullopt;
-	}
-	if (string.substr(0, n) != "text/html") {
-		std::cerr << "Unsupported MIME type " << string.substr(0, n) << " in URL" << std::endl;
-		return std::nullopt;
-	}
-	// todo: make URL an enum (Rust style) or abstract class (OO style)
-	// this isn't really what path is for...
-	std::string path(string.substr(n + 1));
-	return URL {
-		.view_source = view_source,
-		.scheme = scheme,
-		.host = "",
-		.port = 0,
-		.path = path,
-		.fragment = "",
-	};
-}
-
-static std::optional<URL> parse_about_url(bool view_source, std::string scheme, std::string_view string) {
-	if (string != "blank") {
-		std::cerr << "Unsupported about page " << string << " in URL" << std::endl;
-		return std::nullopt;
-	}
-	return URL {
-		.view_source = view_source,
-		.scheme = scheme,
-		.host = "blank",
-		.port = 0,
-		.path = "",
-		.fragment = "",
-	};
-}
-
-static std::optional<URL> parse_relative_file_url(bool view_source, std::string scheme, std::string_view string) {
-	return URL {
-		.view_source = view_source,
-		.scheme = scheme,
-		.host = "",
-		.port = 0,
-		.path = std::string(string),
-		.fragment = "",
-	};
-}
-
-static std::optional<URL> parse_standard_url(bool view_source, std::string scheme, std::string_view string) {
-	std::string host, path, fragment;
-	size_t n = string.find('/');
-	if (n == std::string::npos) {
-		host = string;
-		path = "/";
-	} else {
-		host = string.substr(0, n);
-		path = string.substr(n);
-	}
-	n = path.find('#');
-	if (n != std::string::npos) {
-		fragment = path.substr(n + 1);
-		path = path.substr(0, n);
-	}
-
-	n = host.find(":");
-	uint16_t port;
-	if (n != std::string::npos) {
-		port = std::stoi(host.substr(n + 1));
-		host = host.substr(0, n);
-	} else if (scheme == "https") {
-		port = 443;
-	} else if (scheme == "http") {
-		port = 80;
-	} else if (scheme == "file") {
-		port = 0;
-	} else {
-		assert(false && "unreachable");
-	}
-
-	if (scheme == "file" && (!host.empty() || port == 0)) {
-		std::cerr << "`file` URL should have neither a host or port" << std::endl;
-		return std::nullopt;
-	}
-
-	return URL {
-		.view_source = view_source,
-		.scheme = scheme,
-		.host = host,
-		.port = port,
-		.path = path,
-		.fragment = fragment,
-	};
-}
-
-std::optional<URL> URL::create(std::string_view string) {
-	auto n = string.find(":");
-	if (n == std::string::npos) {
-		// todo: default to https
-		std::cerr << "Expected scheme in URL" << std::endl;
-		return std::nullopt;
-	}
-	std::string scheme(string.substr(0, n));
-
-	bool view_source = false;
-	if (scheme == "view-source") {
-		view_source = true;
-		string = string.substr(n + 1);
-
-		n = string.find(":");
-		if (n == std::string::npos) {
-			std::cerr << "Expected scheme after view-source in URL" << std::endl;
-			return std::nullopt;
-		}
-		scheme = string.substr(0, n);
-	}
-	string = string.substr(n + 1);
-
-	constexpr std::array supported_protocols{"http", "https", "file", "data", "about"};
-	bool supported = std::find(supported_protocols.begin(), supported_protocols.end(), scheme) != supported_protocols.end();
-	if (!supported) {
-		std::cerr << "Unsupported protocol " << scheme << " in URL" << std::endl;
-		return std::nullopt;
-	}
-
-	if (scheme == "data") {
-		return parse_data_url(view_source, std::move(scheme), string);
-	} else if (scheme == "about") {
-		return parse_about_url(view_source, std::move(scheme), string);
-	} else if (scheme == "file") {
-		if (string.starts_with("//")) {
-			return parse_standard_url(view_source, std::move(scheme), string.substr(2));
-		} else {
-			return parse_relative_file_url(view_source, std::move(scheme), string);
-		}
-	} else if (scheme == "http" || scheme == "https") {
-		if (!string.starts_with("//")) {
-			std::cerr << "Expected '//' after scheme: in " << scheme << " URL" << std::endl;
-			return std::nullopt;
-		}
-		string = string.substr(2);
-		return parse_standard_url(view_source, std::move(scheme), string);
-	} else {
-		assert(false && "unreachable");
-	}
-}
-
-URL URL::ABOUT_BLANK = *URL::create("about:blank");
-
-std::optional<URL> URL::resolve(std::string_view url_) const {
-	if (url_.find("://") != std::string::npos || url_.find("file:.") != std::string::npos) {
-		// url is abosolute or relative file
-		return URL::create(url_);
-	}
-	std::string url { url_ };
-	if (url.starts_with('#')) {
-		URL out = *this;
-		out.fragment = url.substr(1);
-		return out;
-	} else if (!url.starts_with('/')) {
-		size_t dir_end = path.rfind("/");
-		std::string_view dir { path.substr(0, dir_end) };
-
-		while (url.starts_with("../")) {
-			size_t new_url_start = url.find("/");
-			assert(new_url_start != std::string::npos);
-			url = url.substr(new_url_start);
-			if (dir.find("/") != std::string::npos) {
-				dir_end = path.rfind("/");
-				dir = dir.substr(0, dir_end);
-			}
-		}
-
-		url.insert(0, "/");
-		url.insert(0, dir);
-	}
-	if (url.starts_with("//")) {
-		return URL::create(scheme + "://" + url);
-	} else {
-		URL out = *this;
-		size_t n = url.find('#');
-		if (n != std::string::npos) {
-			out.fragment = url.substr(n + 1);
-			out.path = url.substr(0, n);
-		} else {
-			out.path = url;
-		}
-		return out;
-	}
-}
-
-std::string URL::origin() const {
-	// todo: relative file messes this up, but who cares about Same-Origin on files?
-	return scheme + "://" + host + ":" + std::to_string(port);
-}
-
-bool URL::equal_disregarding_fragment(URL const& other) const {
-	return view_source == other.view_source && scheme == other.scheme && host == other.host && port == other.port && path == other.path;
-}
-
-bool URL::operator==(const URL& other) const noexcept {
-	return equal_disregarding_fragment(other) && fragment == other.fragment;
-}
-
-// todo: special hash and eq impls for this?
-URL URL::reusable_connection_subsection() const {
-	return URL {
-		.view_source = false,
-		.scheme = scheme,
-		.host = host,
-		.port = port,
-		.path = "",
-		.fragment = "",
-	};
-}
-
-// todo: special hash and eq impls for this?
-URL URL::cachable_subsection() const {
-	return URL {
-		.view_source = false,
-		.scheme = scheme,
-		.host = host,
-		.port = port,
-		.path = path,
-		.fragment = "",
-	};
-}
-
-std::ostream& operator<<(std::ostream& os, URL const& url) {
-	char const *source = (url.view_source) ? "view-source:" : "";
-	char const *scheme_delimeter = [&]() {
-		if (url.scheme == "https" || url.scheme == "http" || (url.scheme == "file" && !url.path.starts_with('.'))) {
-			return "://";
-		} else {
-			return ":";
-		}
-	}();
-	auto port = [&]() -> std::optional<uint16_t> {
-		if (url.scheme == "https" && url.port == 443) {
-			return std::nullopt;
-		} else if (url.scheme == "http" && url.port == 80) {
-			return std::nullopt;
-		} else if (url.scheme == "file" || url.scheme == "data" || url.scheme == "about") {
-			return std::nullopt;
-		} else {
-			return url.port;
-		}
-	}();
-
-	os << source << url.scheme << scheme_delimeter << url.host;
-	if (port) {
-		os << ":" << *port;
-	}
-	os << url.path;
-	if (!url.fragment.empty()) {
-		os << "#" << url.fragment;
-	}
-	return os;
-}
-
-std::size_t std::hash<URL>::operator()(const URL& u) const noexcept {
-	size_t seed = 0;
-	combine_hash(seed, std::hash<bool>{}(u.view_source));
-	combine_hash(seed, std::hash<std::string>{}(u.scheme));
-	combine_hash(seed, std::hash<std::string>{}(u.host));
-	combine_hash(seed, std::hash<uint16_t>{}(u.port));
-	combine_hash(seed, std::hash<std::string>{}(u.path));
-	combine_hash(seed, std::hash<std::string>{}(u.fragment));
-	return seed;
 }
 
 HttpRequest::HttpRequest(URL url)
@@ -327,6 +38,40 @@ HttpRequest::HttpRequest(URL u, HttpMethod m, std::optional<std::string> p)
 	, method(m)
 	, payload(p)
 {}
+
+struct Buffer {
+	uint8_t *ptr;
+	uint64_t size;
+
+	Buffer() : Buffer(nullptr, 0) {}
+
+	Buffer(uint8_t *p, uint64_t s)
+		: ptr(p)
+		, size(s)
+	{}
+
+	[[nodiscard]]
+	std::string_view as_string_view() const {
+		return std::string_view((char *)ptr, size);
+	}
+
+	[[nodiscard]]
+	bool empty() const {
+		return size == 0;
+	}
+
+	[[nodiscard]]
+	Buffer advanced(uint64_t amount) const {
+		assert(amount <= size);
+		return Buffer(ptr + amount, size - amount);
+	}
+
+	[[nodiscard]]
+	Buffer shrunk_to(uint64_t amount) const {
+		assert(amount <= size);
+		return Buffer(ptr, amount);
+	}
+};
 
 // todo: This class has a lot of asserts around reading and validating data.
 // Replacing these errors involves delving deeper into if they are:
@@ -396,6 +141,12 @@ public:
 				ERR_print_errors_fp(stderr);
 				goto failure_ssl_free;
 			}
+
+			// todo: verify certificate
+			// SSL_CTX_set_verify
+			// SSL_CTX_set_default_verify_paths
+			// maybe also
+			// SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION)
 
 			int connection_status = SSL_connect(ssl);
 			if (connection_status == 0) {
@@ -503,16 +254,16 @@ public:
 		}
 
 		int const buffer_size = 4096;
-		char input_buffer[buffer_size];
-		char *next_in;
-		int avail_in;
-		HttpResponse response = parse_up_to_body(input_buffer, buffer_size, next_in, avail_in);
-		parse_body(input_buffer, buffer_size, next_in, avail_in, response);
+		uint8_t input_buffer_ptr[buffer_size];
+		Buffer input_buffer { input_buffer_ptr, buffer_size };
+
+		auto [response, remaining] = parse_up_to_body(input_buffer);
+		parse_body(input_buffer, remaining, response);
 
 		return response;
 	}
 
-	HttpResponse parse_up_to_body(char *input_buffer, int input_buffer_size, char *& next_in, int& avail_in) {
+	std::pair<HttpResponse, Buffer> parse_up_to_body(Buffer input_buffer) {
 
 		enum ParsingState {
 			PARSING_STATUS_LINE,
@@ -524,13 +275,14 @@ public:
 		ParsingState parsing_state = PARSING_STATUS_LINE;
 		HttpResponse response;
 
-		int bytes_received;
+
+		Buffer buffer;
 		do {
-			bytes_received = read(input_buffer, input_buffer_size);
-			if (bytes_received == 0) {
+			buffer = read(input_buffer);
+			if (buffer.empty()) {
 				break;
 			}
-			received.append(input_buffer, bytes_received);
+			received.append(buffer.as_string_view());
 
 			for (;;) {
 
@@ -546,6 +298,7 @@ public:
 					assert(status.size() == 3);
 
 					response.version = status[0];
+					// todo: no exceptions
 					response.status = std::stoi(std::string{status[1]});
 					response.explanation = status[2];
 
@@ -575,18 +328,20 @@ public:
 			}
 		} while (parsing_state != PARSING_BODY);
 
-		int data_offset = bytes_received - received.length();
-		next_in = input_buffer + data_offset;
-		avail_in = received.length();
+		// Here we want the bytes that are in the back of the buffer
+		// and `received` contains only bytes for the body, which are also
+		// in the input buffer.
+		int data_offset = buffer.size - received.length();
+		Buffer remaining { input_buffer.ptr + data_offset, received.length() };
 
-		return response;
+		return std::make_pair(response, remaining);
 	}
 
-	void parse_body(char *input_buffer, int input_buffer_size, char *next_in, int avail_in, HttpResponse& response) {
-		int total_content_length = -1;
+	void parse_body(Buffer input_buffer, Buffer buffer, HttpResponse& response) {
+		std::optional<uint64_t> total_content_length_opt;
 		if (auto content_length_entry = response.headers.find("content-length"); content_length_entry != response.headers.end()) {
 			// todo: no more exceptions!
-			total_content_length = std::stol(content_length_entry->second);
+			total_content_length_opt = std::stol(content_length_entry->second);
 		}
 
 		bool decompress = false;
@@ -618,7 +373,7 @@ public:
 			}
 		}
 
-		assert(total_content_length != -1 || chunked_transfer);
+		assert(total_content_length_opt || chunked_transfer);
 
 		if (decompress) {
 			std::cerr << "Uncompressing body" << std::endl;
@@ -632,108 +387,60 @@ public:
 			assert(ret == Z_OK);
 		}
 
-		int current_content_length = 0;
-		int size_of_current_chunk = -1;
+		uint64_t current_content_length = 0;
 
 		if (chunked_transfer) {
+			uint64_t size_of_current_chunk;
 			// per chunk
 			do {
-				size_of_current_chunk = 0;
+				size_of_current_chunk = parse_chunked_encoding_chunk_length(input_buffer, buffer);
 				current_content_length = 0;
-				// odd loop, in practice only runs twice, nullptr then not
-				for (;;) {
-					char *newline = (char *)memmem(next_in, avail_in, "\r\n", 2);
-					if (newline == nullptr) {
-						int length = avail_in;
-						bool ends_with_carraige_return = next_in[avail_in - 1] == '\r';
-						if (ends_with_carraige_return) {
-							length--;
-						}
-						if (length != 0) {
-							std::string_view s(next_in, length);
-							int adding;
-							if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
-								// todo: is it really fatal?
-								assert(false && "Fatal network error");
-							}
-							size_of_current_chunk = (size_of_current_chunk << length) + adding;
-						}
-
-						if (ends_with_carraige_return) {
-							input_buffer[0] = '\r';
-							avail_in = read(input_buffer + 1, input_buffer_size - 1) + 1;
-							next_in = input_buffer;
-						} else {
-							avail_in = read(input_buffer, input_buffer_size);
-						}
-						next_in = input_buffer;
-					} else {
-						int length = newline - next_in;
-						if (length != 0) {
-							std::string_view s(next_in, length);
-							int adding;
-							if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
-								// todo: is it really fatal?
-								assert(false && "Fatal network error");
-							}
-							size_of_current_chunk = (size_of_current_chunk << length) + adding;
-						}
-
-						next_in += length + 2;
-						avail_in -= length + 2;
-						break;
-					}
-				}
-
 				// we break in the middle of this loop because of the data we start with
 				do {
-					int amount_to_read = std::min(size_of_current_chunk - current_content_length, avail_in);
+					uint64_t amount_to_read = std::min(size_of_current_chunk - current_content_length, buffer.size);
+					Buffer to_decode { buffer.ptr, amount_to_read };
+					decode_exact(to_decode, decompress, &zstream, response);
 
-					decode_exact(next_in, amount_to_read, decompress, &zstream, response);
-
-					if (amount_to_read == avail_in) {
-						avail_in = read(input_buffer, input_buffer_size);
-						next_in = input_buffer;
+					if (amount_to_read == buffer.size) {
+						buffer = read(input_buffer);
 					} else {
-						next_in += amount_to_read;
-						avail_in -= amount_to_read;
+						buffer = buffer.advanced(amount_to_read);
 					}
 
 					current_content_length += amount_to_read;
 				} while (current_content_length != size_of_current_chunk);
 
-				if (avail_in >= 2) {
-					assert(next_in[0] == '\r');
-					assert(next_in[1] == '\n');
-					next_in += 2;
-					avail_in -= 2;
+				if (buffer.size >= 2) {
+					assert(buffer.ptr[0] == '\r');
+					assert(buffer.ptr[1] == '\n');
+					buffer = buffer.advanced(2);
 				} else {
 					assert(false && "Not handling split \\r\\n!");
 				}
 
 			} while (size_of_current_chunk != 0);
 		} else {
+			uint64_t total_content_length = *total_content_length_opt;
 			// we break in the middle of this loop because of the data we start with
 			for (;;) {
-				int amount_to_read = std::min(total_content_length - current_content_length, avail_in);
-
-				decode_exact(next_in, amount_to_read, decompress, &zstream, response);
+				uint64_t amount_to_read = std::min(total_content_length - current_content_length, buffer.size);
+				Buffer to_decode { buffer.ptr, amount_to_read };
+				decode_exact(to_decode, decompress, &zstream, response);
 
 				current_content_length += amount_to_read;
 				if (current_content_length == total_content_length) {
 					break;
 				}
 
-				if (amount_to_read == avail_in) {
-					avail_in = read(input_buffer, input_buffer_size);
-					next_in = input_buffer;
+				if (amount_to_read == buffer.size) {
+					buffer = read(input_buffer);
 
-					if (avail_in == 0) {
+					// They may overestimate their Content-Length.
+					if (buffer.empty()) {
 						break;
 					}
 				} else {
-					next_in += amount_to_read;
-					avail_in -= amount_to_read;
+					buffer = buffer.advanced(amount_to_read);
 				}
 			}
 		}
@@ -744,15 +451,62 @@ public:
 	}
 
 private:
-	void decode_exact(char *next_in, int avail_in, bool decompress, z_stream *zstream, HttpResponse& response) {
+	// mutable params with no warning spooks me :(
+	uint64_t parse_chunked_encoding_chunk_length(Buffer input_buffer, Buffer& curr) {
+		uint64_t size_of_current_chunk = 0;
+		for (;;) {
+			uint8_t *newline = (uint8_t *)memmem(curr.ptr, curr.size, "\r\n", 2);
+			if (newline == nullptr) {
+				Buffer b { curr };
+				bool ends_with_carraige_return = curr.ptr[curr.size - 1] == '\r';
+				if (ends_with_carraige_return) {
+					b.size--;
+				}
+				if (!b.empty()) {
+					std::string_view s { b.as_string_view() };
+					uint64_t adding;
+					if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
+						// todo: is it really fatal?
+						assert(false && "Fatal network error");
+					}
+					size_of_current_chunk = (size_of_current_chunk << 4 * b.size) + adding;
+				}
+
+				if (ends_with_carraige_return) {
+					input_buffer.ptr[0] = '\r';
+					Buffer offset = read(input_buffer.advanced(1));;
+					curr = Buffer { input_buffer.ptr, offset.size + 1 };
+				} else {
+					curr = read(input_buffer);
+				}
+			} else {
+				Buffer b { curr.ptr, (uint64_t) (newline - curr.ptr) };
+				if (!b.empty()) {
+					std::string_view s { b.as_string_view() };
+					uint64_t adding;
+					if (std::from_chars(s.data(), s.data() + s.size(), adding, 16).ec != std::errc{}) {
+						// todo: is it really fatal?
+						assert(false && "Fatal network error");
+					}
+					size_of_current_chunk = (size_of_current_chunk << 4 * b.size) + adding;
+				}
+
+				curr = curr.advanced(b.size + 2);
+				break;
+			}
+		}
+		return size_of_current_chunk;
+	}
+
+	void decode_exact(Buffer buffer, bool decompress, z_stream *zstream, HttpResponse& response) {
 		if (decompress) {
 			int const output_buffer_size = 4096;
-			char output_buffer[output_buffer_size];
-			zstream->avail_in = avail_in;
-			zstream->next_in = (unsigned char *)next_in;
+			uint8_t output_buffer[output_buffer_size];
+			zstream->avail_in = buffer.size;
+			zstream->next_in = buffer.ptr;
 			do {
 				zstream->avail_out = output_buffer_size;
-				zstream->next_out = (unsigned char *)output_buffer;
+				zstream->next_out = output_buffer;
 				int ret = inflate(zstream, Z_NO_FLUSH);
 				assert(ret != Z_STREAM_ERROR);
 				switch (ret) {
@@ -767,10 +521,10 @@ private:
 				}
 
 				int have = output_buffer_size - zstream->avail_out;
-				response.body.append(output_buffer, have);
+				response.body.append((char *)output_buffer, have);
 			} while (zstream->avail_out == 0);
 		} else {
-			response.body.append(next_in, avail_in);
+			response.body.append(buffer.as_string_view());
 		}
 	}
 
@@ -796,13 +550,13 @@ private:
 		return true;
 	}
 
-	int read(char *buffer, int length) const {
+	Buffer read(Buffer buf) const {
 		if (is_encrypted()) {
-			int bytes_received = SSL_read(m_ssl, buffer, length);
+			int bytes_received = SSL_read(m_ssl, buf.ptr, buf.size);
 			if (bytes_received <= 0) {
 				switch (SSL_get_error(m_ssl, bytes_received)) {
 				case SSL_ERROR_ZERO_RETURN:
-					return 0;
+					return buf.shrunk_to(0);
 				default:
 					// i can't use goto for error handling this is tragic?
 					// do i have to... use deconstructors?
@@ -815,11 +569,11 @@ private:
 					break;
 				}
 			}
-			return bytes_received;
+			return buf.shrunk_to(bytes_received);
 		} else {
-			int bytes_received = recv(m_socket_fd, buffer, length, 0);
+			int bytes_received = recv(m_socket_fd, buf.ptr, buf.size, 0);
 			assert(bytes_received != -1);
-			return bytes_received;
+			return buf.shrunk_to(bytes_received);
 		}
 	}
 };

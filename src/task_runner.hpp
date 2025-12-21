@@ -2,7 +2,7 @@
 #include <memory>
 #include <queue>
 
-#include "network.hpp"
+#include "url.hpp"
 #include "jscontext.hpp"
 
 class Tab;

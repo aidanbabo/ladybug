@@ -12,6 +12,7 @@ find_package(unofficial-duktape CONFIG REQUIRED)
 add_executable(ladybug
 	src/main.cpp
 	src/utils.cpp
+	src/url.cpp
 	src/network.cpp
 	src/layout.cpp
 	src/html_parser.cpp

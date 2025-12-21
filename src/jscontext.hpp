@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "network.hpp"
+#include "url.hpp"
 #include "parsers.hpp"
 
 class Tab;
