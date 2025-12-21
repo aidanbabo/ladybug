@@ -1,7 +1,3 @@
-// todo: A better system for knowing what has changed. Now that we can render the tab and chrome separately
-// it would be nice to only do it once per change. Letting the browser be in charge of telling the Tab and chrome
-// about when to recalculate and raster would be ideal.
-
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
 #include "include/ports/SkFontMgr_directory.h"
@@ -23,6 +19,23 @@
 #include "utils.hpp"
 
 #include "ui.hpp"
+
+std::optional<CSPSource> csp_backup(CSPSource src) {
+	switch (src) {
+        case CSPSource::Default:
+		return std::nullopt;
+        case CSPSource::Style:
+		return CSPSource::Default;
+        case CSPSource::StyleElem:
+		return CSPSource::Style;
+        case CSPSource::Script:
+		return CSPSource::Default;
+        case CSPSource::ScriptElem:
+		return CSPSource::Script;
+	default:
+		assert(false && "unreachable");
+        }
+}
 
 // todo: proper resize of chrome
 static void compute_surfaces(int width, int height, sk_sp<SkSurface>& root_surface, sk_sp<SkSurface>& chrome_surface, Chrome const& chrome) {
@@ -74,6 +87,49 @@ static std::string url_encode_parameters(std::vector<std::pair<std::string, std:
 	return out;
 }
 
+static std::unordered_map<CSPSource, std::unordered_set<std::string>> form_content_security_policy(std::string_view header) {
+	constexpr std::array<std::pair<std::string_view, CSPSource>, 5> STR_TO_CSP_SRC{{
+		{"default-src", CSPSource::Default},
+		{"style-src", CSPSource::Style},
+		{"style-elem-src", CSPSource::StyleElem},
+		{"script-src", CSPSource::Script},
+		{"script-elem-src", CSPSource::ScriptElem},
+	}};
+
+	std::unordered_map<CSPSource, std::unordered_set<std::string>> source_to_allowed_origins;
+
+	for (auto const& csp_str : split(header, ";")) {
+		auto csp = split(trim_whitespace(csp_str), " ");
+		if (csp.empty()) continue;
+
+		std::string_view source_string { trim_whitespace(csp[0]) };
+		CSPSource src;
+		for (auto const& [str, s] : STR_TO_CSP_SRC) {
+			if (source_string == str) {
+				src = s;
+				goto found_source; // I LOVE GOTO I LOVE GOTO ( where is my for..else :sob:)
+			}
+		}
+		continue;
+found_source:
+		std::unordered_set<std::string> allowed_origins;
+		for (size_t i = 1; i < csp.size(); i++) {
+			std::string_view site = trim_whitespace(csp[i]);
+			if (site == "'none'") {
+				allowed_origins.clear();
+				break;
+			}
+			// todo: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy#fetch_directive_syntax
+			if (auto u = URL::create(site)) {
+				allowed_origins.insert(u->origin());
+				std::cerr << "Allowing " << u->origin() << " for " << csp[0] << std::endl;
+			}
+		}
+		source_to_allowed_origins.insert({src, allowed_origins});
+	}
+	return source_to_allowed_origins;
+}
+
 
 // todo: I don't like how partially constructed a Tab object is, there is no need for m_url to be null just for
 // Cross-Site Requests
@@ -119,17 +175,8 @@ void Tab::load(HttpRequest request, bool alter_history) {
 		}
 
 		m_allowed_origins = std::nullopt;
-
 		if (auto f = response->headers.find("content-security-policy"); f != response->headers.end()) {
-			auto const& csp = split(f->second, " ");
-			if (!csp.empty() && csp[0] == std::string_view{"default-src"}) {
-				m_allowed_origins = std::unordered_set<std::string>{};
-				for (size_t i = 1; i < csp.size(); i++) {
-					if (auto u = URL::create(csp[i])) {
-						m_allowed_origins->insert(u->origin());
-					}
-				}
-			}
+			m_allowed_origins = form_content_security_policy(f->second);
 		}
 
 		m_scroll = 0;
@@ -175,7 +222,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
 					continue;
 				}
-				if (!allowed_request(*style_url)) {
+				if (!allowed_request(*style_url, CSPSource::StyleElem)) {
 					std::cerr << "Blocked stylesheet at: '" << access << "' due to CSP" << std::endl;
 					continue;
 				}
@@ -242,7 +289,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Skipping malformed url: '" << access << "'" << std::endl;
 					continue;
 				}
-				if (!allowed_request(*script_url)) {
+				if (!allowed_request(*script_url, CSPSource::ScriptElem)) {
 					std::cerr << "Blocked script at: '" << access << "' due to CSP" << std::endl;
 					continue;
 				}
@@ -390,8 +437,27 @@ float Tab::document_height() const { return m_document->m_height; }
 
 float Tab::scroll() const { return m_scroll; }
 
-bool Tab::allowed_request(URL const& url) const {
-	return m_allowed_origins == std::nullopt || m_allowed_origins->find(url.origin()) != m_allowed_origins->end();
+bool Tab::allowed_request(URL const& url, CSPSource source) const {
+	if (m_allowed_origins == std::nullopt) {
+		return true;
+	}
+
+	auto allowed_origins = m_allowed_origins->find(source);
+	for (;;) {
+		if (allowed_origins != m_allowed_origins->end()) break;
+		auto backup = csp_backup(source);
+		if (!backup) break;
+
+		source = *backup;
+		m_allowed_origins->find(source);
+	}
+
+	if (allowed_origins == m_allowed_origins->end()) {
+		// no policy and no default means yay?
+		return true;
+	}
+
+	return allowed_origins->second.find(url.origin()) != allowed_origins->second.end();
 }
 
 void Tab::blur() {
@@ -645,6 +711,9 @@ void Chrome::enter(Browser& browser) {
 			browser.m_tabs[browser.m_active_tab]->load(*url, true);
 			m_focus = Focus::Nothing;
 			browser.set_window_title();
+			// todo: bug here where we don't redraw the tab
+			// This should be resolved by the end of the current
+			// chapter with all the dirty flags we introduce
 		}
 	}
 }

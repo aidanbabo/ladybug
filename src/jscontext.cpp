@@ -396,7 +396,7 @@ duk_ret_t JSContext::duk_xml_http_request_send(duk_context *ctx) {
 	}
 
 	auto request = HttpRequest(*full_url, method, body);
-	if (!jsctx->m_tab.allowed_request(request.url)) {
+	if (!jsctx->m_tab.allowed_request(request.url, CSPSource::ScriptElem)) {
 		// Cross-origin XHR blocked by CSP.
 		return DUK_RET_ERROR;
 	}

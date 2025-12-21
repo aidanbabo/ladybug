@@ -6,6 +6,7 @@
 #include "include/core/SkRect.h"
 
 #include <functional>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "draw.hpp"
@@ -23,6 +24,16 @@ enum class HistoryNavigationAttempt {
 	NoNavigation,
 	NeedsConfirmation,
 	Navigated,
+};
+
+// todo: better, accurate name
+enum class CSPSource {
+	Default,
+	Style,
+	StyleElem,
+	Script,
+	ScriptElem,
+	// todo: style-src-attr (inline styles on elements)
 };
 
 class Browser;
@@ -43,7 +54,7 @@ class Tab {
 	std::optional<JSContext> m_js;
 	Browser& m_browser;
 	// URL.origin()
-	std::optional<std::unordered_set<std::string>> m_allowed_origins;
+	std::optional<std::unordered_map<CSPSource, std::unordered_set<std::string>>> m_allowed_origins;
 	TaskRunner m_task_runner;
 
 
@@ -64,7 +75,7 @@ public:
 	float document_height() const;
 	float scroll() const;
 
-	bool allowed_request(URL const& url) const;
+	bool allowed_request(URL const& url, CSPSource source) const;
 
 	void blur();
 
