@@ -8,12 +8,14 @@ find_package(harfbuzz CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
 find_package(unofficial-skia CONFIG REQUIRED)
 find_package(unofficial-duktape CONFIG REQUIRED)
+find_package(asio CONFIG REQUIRED)
 
 add_executable(ladybug
 	src/main.cpp
 	src/utils.cpp
 	src/url.cpp
 	src/network.cpp
+	src/network_thread.cpp
 	src/layout.cpp
 	src/html_parser.cpp
 	src/css_parser.cpp
@@ -32,5 +34,6 @@ target_link_libraries(ladybug PRIVATE harfbuzz::harfbuzz)
 target_link_libraries(ladybug PRIVATE SDL3::SDL3)
 target_link_libraries(ladybug PRIVATE unofficial::skia::skia)
 target_link_libraries(ladybug PRIVATE unofficial::duktape::duktape)
+target_link_libraries(ladybug PRIVATE asio::asio)
 
 target_compile_options(ladybug PRIVATE -g -Wall -Wextra -Wpedantic)

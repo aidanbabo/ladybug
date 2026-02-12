@@ -1,13 +1,23 @@
 {
   "dependencies": [
     {
-      "name": "skia",
-      "features": ["freetype", "fontconfig", "harfbuzz"]
+      "name": "asio",
+      "features": [
+        "openssl"
+      ]
     },
-    "freetype",
+    "duktape",
     "fontconfig",
+    "freetype",
     "harfbuzz",
     "sdl3",
-    "duktape"
+    {
+      "name": "skia",
+      "features": [
+        "fontconfig",
+        "freetype",
+        "harfbuzz"
+      ]
+    }
   ]
 }

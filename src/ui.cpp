@@ -168,7 +168,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 
 		m_url = request.url;
 	} else {
-		auto response = m_browser.m_connection_manager.request(request, m_url);
+		auto response = m_browser.m_network_manager.block_for_request(request, m_url);
 		if (!response) {
 			std::cerr << "Failed to load new document" << std::endl;
 			return;
@@ -226,7 +226,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Blocked stylesheet at: '" << access << "' due to CSP" << std::endl;
 					continue;
 				}
-				auto maybe_response = m_browser.m_connection_manager.request(*style_url, request.url);
+				auto maybe_response = m_browser.m_network_manager.block_for_request(*style_url, request.url);
 				if (!maybe_response) {
 					std::cerr << "Error fetching stylesheet at: '" << access << "'" << std::endl;
 					continue;
@@ -293,7 +293,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 					std::cerr << "Blocked script at: '" << access << "' due to CSP" << std::endl;
 					continue;
 				}
-				auto code = m_browser.m_connection_manager.request(*script_url, request.url);
+				auto code = m_browser.m_network_manager.block_for_request(*script_url, request.url);
 				if (!code) {
 					std::cerr << "Error fetching script at: '" << access << "'" << std::endl;
 					continue;

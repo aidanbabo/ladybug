@@ -1,4 +1,5 @@
 #include "task_runner.hpp"
+#include <iostream>
 
 struct Task {
 	virtual void run() = 0;
@@ -20,6 +21,8 @@ struct JSTask : public Task {
 	void run() override {
 		js.run(body, fetched_from);
 	}
+
+	~JSTask() override = default;
 };
 
 TaskRunner::TaskRunner(Tab& tab)
@@ -32,6 +35,11 @@ TaskRunner::TaskRunner(Tab& tab)
 void TaskRunner::schedule_js(JSContext& js, std::optional<URL> fetched_from, std::string body) {
 	// NO idea what's going on here. I do not know why we have a condvar at all.
 	// m_cond_var.wait /* for what? */
+	if (fetched_from) {
+		std::cerr << "Got " << *fetched_from << " for fetched_from" << std::endl;
+	} else {
+		std::cerr << "Got nullopt for fetched_from" << std::endl;
+	}
 	m_mutex.lock();
 	m_tasks.push(std::make_unique<JSTask>(js, fetched_from, body));
 	m_cond_var.notify_all();
@@ -40,20 +48,27 @@ void TaskRunner::schedule_js(JSContext& js, std::optional<URL> fetched_from, std
 
 void TaskRunner::run() {
 	std::optional<std::unique_ptr<Task>> task;
-	// m_cond_var.wait /* for what? */
-	m_mutex.lock();
-	if (!m_tasks.empty()) {
-		task = std::move(m_tasks.front());
-		m_tasks.pop();
+	{
+		std::unique_lock lock(m_mutex);
+		if (!m_tasks.empty()) {
+			task = std::move(m_tasks.front());
+			m_tasks.pop();
+		}
 	}
-	m_mutex.unlock();
-	if (task)
+	if (task) {
 		(*task)->run();
+		auto ff = dynamic_cast<JSTask*>(&**task)->fetched_from;
+		if (ff) {
+			std::cerr << "Gottttttt " << *ff << " for fetched_from" << std::endl;
+		} else {
+			std::cerr << "Gottttttt nullopt for fetched_from" << std::endl;
+		}
+	}
 
 	// ???
-	// m_cond_var.wait /* for what? */
-	m_mutex.lock();
-	m_mutex.unlock();
+	{
+		std::unique_lock lock(m_mutex);
+	}
 }
 
 TaskRunner::~TaskRunner() = default;

@@ -193,7 +193,7 @@ class Browser {
 	// sk_sp<SkSurface> m_popup_surface;
 	sk_sp<SkFontMgr> m_font_mgr;
 	FontCache m_font_cache;
-	ConnectionManager m_connection_manager;
+	NetworkManager m_network_manager;
 
 	std::vector<std::unique_ptr<Tab>> m_tabs{};
 	size_t m_active_tab{};

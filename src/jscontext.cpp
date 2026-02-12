@@ -401,7 +401,8 @@ duk_ret_t JSContext::duk_xml_http_request_send(duk_context *ctx) {
 		return DUK_RET_ERROR;
 	}
 
-	auto out = jsctx->m_tab.m_browser.m_connection_manager.request(request, jsctx->m_tab.m_url);
+	// todo: all of these
+	auto out = jsctx->m_tab.m_browser.m_network_manager.block_for_request(request, jsctx->m_tab.m_url);
 	if (!out) {
 		return DUK_RET_ERROR;
 	}
@@ -520,9 +521,9 @@ void JSContext::run(std::string_view code, std::optional<URL> script_url) {
 		return;
 	}
 	if (script_url) {
-		std::cerr << "Script " << *script_url << " crashed" << std::endl;;
+		std::cerr << "Script " << *script_url << " crashed" << std::endl;
 	} else {
-		std::cerr << "Inline script crashed" << std::endl;;
+		std::cerr << "Inline script crashed" << std::endl;
 	}
 }
 
