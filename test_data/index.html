@@ -7,14 +7,19 @@
 		p.yellow.boldme { color: yellow; text-weight: bold; }
 	</style>
 	<script defer>
-		function huh() {
-			return "huh";
-		}
 		try {
+			function huh() {
+				return "huh";
+			}
 			setTimeout(function() { console.log("hello from a timeout"); }, 15000);
+			var xhr = new XMLHttpRequest();
+			xhr.open('GET', 'file:///home/ababo/dev/browser/test_data/index.html', false);
+			var data = xhr.send();
+			console.log('Got data from return value', data);
 		} catch (e) {
 			console.log(e);
 		}
+
 	</script>
 </head>
 <!-- Default page rendered with no arguments -->

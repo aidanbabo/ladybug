@@ -36,12 +36,30 @@ Node.prototype.dispatchEvent = function(evt) {
 	return evt;
 }
 
-function XMLHttpRequest() {}
+XHR_REQUESTS = {}
 
+function XMLHttpRequest() {
+	this.handle = Object.keys(XHR_REQUESTS).length;
+	XHR_REQUESTS[this.handle] = this;
+}
+
+// todo: is_async is optional and defaults to true.
 XMLHttpRequest.prototype.open = function(method, url, is_async) {
-	if (is_async) throw Error('Asynchronous XHR is not supported');
+	this.is_async = is_async;
 	this.method = method;
 	this.url = url;
+}
+
+function __runXHROnload(body, handle) {
+try {
+	var obj = XHR_REQUESTS[handle];
+	var evt = new Event('load');
+	obj.responseText = body;
+	if (obj.onload)
+		obj.onload(evt);
+} catch (e) {
+	console.log('error in __runXMLOnload', e);
+}
 }
 
 SET_TIMEOUT_REQUESTS = {}

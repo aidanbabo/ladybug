@@ -4,35 +4,12 @@
 #include <asio/experimental/concurrent_channel.hpp>
 
 #include <optional>
-#include <string>
-#include <unordered_map>
 
+#include "task_runner.hpp"
+#include "http.hpp"
 #include "url.hpp"
 
 void network_init();
-
-enum class HttpMethod {
-	GET,
-	POST,
-};
-
-struct HttpRequest {
-	URL url;
-	HttpMethod method;
-	std::optional<std::string> payload;
-
-	HttpRequest(); // useless, this is for asio
-	HttpRequest(URL url);
-	HttpRequest(URL u, HttpMethod m, std::optional<std::string> p);
-};
-
-struct HttpResponse {
-	int status;
-	std::string version;
-	std::string explanation;
-	std::unordered_map<std::string, std::string> headers;
-	std::string body;
-};
 
 struct Waiter {
 	std::optional<std::optional<HttpResponse>> response;
@@ -43,7 +20,9 @@ struct Waiter {
 struct NetworkTask {
 	HttpRequest request;
 	std::optional<URL> referrer;
-	std::optional<Waiter*> waiter;
+	Waiter *waiter;
+	TaskRunner *task_runner;
+	std::optional<std::unique_ptr<AfterNetworkTask>> after_network_task;
 };
 
 class NetworkManager {
@@ -53,5 +32,6 @@ class NetworkManager {
 public:
 	NetworkManager();
 	std::optional<HttpResponse> block_for_request(HttpRequest const& request, std::optional<URL> referrer);
+	void request_then_add_task(HttpRequest const& request, std::optional<URL> referrer, TaskRunner *task_runner, std::unique_ptr<AfterNetworkTask> aft);
 	~NetworkManager();
 };

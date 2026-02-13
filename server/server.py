@@ -166,7 +166,6 @@ def handle_connection(conx):
     conx.send(response.encode('utf8'))
     conx.close()
 
-
 if __name__ == '__main__':
     s = socket.socket(
             family=socket.AF_INET,
@@ -175,6 +174,9 @@ if __name__ == '__main__':
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(('', 8000))
     s.listen()
-    while True:
-        conx, addr = s.accept()
-        handle_connection(conx)
+    try:
+        while True:
+            conx, addr = s.accept()
+            handle_connection(conx)
+    except KeyboardInterrupt:
+        s.close()

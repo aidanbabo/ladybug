@@ -279,6 +279,7 @@ void Tab::load(HttpRequest request, bool alter_history) {
 		m_url = request.url;
 
 		if (m_js.has_value()) {
+			m_js->discard();
 			m_js.reset();
 		}
 		m_js.emplace(*this);
@@ -449,7 +450,7 @@ bool Tab::allowed_request(URL const& url, CSPSource source) const {
 		if (!backup) break;
 
 		source = *backup;
-		m_allowed_origins->find(source);
+		allowed_origins = m_allowed_origins->find(source);
 	}
 
 	if (allowed_origins == m_allowed_origins->end()) {

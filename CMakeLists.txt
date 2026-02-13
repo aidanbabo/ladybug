@@ -24,6 +24,7 @@ add_executable(ladybug
 	src/ui.cpp
 	src/jscontext.cpp
 	src/task_runner.cpp
+	src/http.cpp
 )
 
 target_link_libraries(ladybug PRIVATE z ssl crypto)

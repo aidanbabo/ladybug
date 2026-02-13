@@ -698,14 +698,19 @@ asio::awaitable<std::optional<HttpResponse>> ConnectionManager::load_http_or_fro
 
 asio::awaitable<void> ConnectionManager::complete_task(NetworkTask t) {
 	auto response = co_await request(t.request, t.referrer);
-	if (t.waiter) {
-		auto waiter = *t.waiter;
+	if (t.waiter != nullptr) {
 		{
 			// no contention, safe to do in async world
-			std::lock_guard lock(waiter->mutex);
-			waiter->response.emplace(std::move(response));
+			std::lock_guard lock(t.waiter->mutex);
+			t.waiter->response = std::optional(std::move(response));
 		}
-		waiter->condvar.notify_one();
+		t.waiter->condvar.notify_all();
+	}
+	if (t.task_runner != nullptr) {
+		assert(t.after_network_task.has_value());
+		(*t.after_network_task)->response = response;
+		std::unique_ptr<Task> task = std::move(*t.after_network_task);
+		t.task_runner->schedule(std::move(task));
 	}
 }
 

@@ -106,7 +106,7 @@ static std::optional<URL> parse_standard_url(bool view_source, std::string schem
 		assert(false && "unreachable");
 	}
 
-	if (scheme == "file" && (!host.empty() || port == 0)) {
+	if (scheme == "file" && (!host.empty() || port != 0)) {
 		std::cerr << "`file` URL should have neither a host or port" << std::endl;
 		return std::nullopt;
 	}

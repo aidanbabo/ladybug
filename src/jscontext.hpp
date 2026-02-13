@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "url.hpp"
+#include "http.hpp"
 #include "parsers.hpp"
 
 class Tab;
@@ -24,6 +25,7 @@ class JSContext {
 	// is this not just an array?
 	std::unordered_map<int, std::shared_ptr<Node>> m_handle_to_node;
 	std::unordered_set<int> m_timers;
+	bool m_discarded = false;
 
 	static duk_ret_t duk_console_log(duk_context *ctx);
 	static duk_ret_t duk_document_query_selector_all(duk_context *ctx);
@@ -50,6 +52,8 @@ public:
 	~JSContext();
 
 	void run(std::string_view code, std::optional<URL> script_url);
+	void dispatch_xhr_onload(HttpResponse response, int handle);
+	void discard();
 
 	[[nodiscard]]
 	EventDispatchResult dispatch_event(std::string_view type, std::shared_ptr<Element> el);

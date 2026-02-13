@@ -26,6 +26,10 @@ static void remove_child(Node& parent, std::shared_ptr<Node> child) {
 	assert(false && "Unreachable");
 }
 
+void JSContext::discard() {
+	m_discarded = true;
+}
+
 duk_ret_t JSContext::duk_console_log(duk_context *ctx) {
 	std::cout << "console.log from js: ";
 
@@ -363,6 +367,14 @@ duk_ret_t JSContext::duk_xml_http_request_send(duk_context *ctx) {
 
 	duk_get_prop_string(ctx, -1, "method");
 	auto method_cstr = duk_get_string(ctx, -1);
+	duk_pop(ctx);
+
+	duk_get_prop_string(ctx, -1, "is_async");
+	auto is_async = duk_get_boolean(ctx, -1);
+	duk_pop(ctx);
+
+	duk_get_prop_string(ctx, -1, "handle");
+	auto handle = duk_get_int(ctx, -1);
 	duk_pop_2(ctx);
 
 	auto jsctx = get_js_context(ctx);
@@ -371,45 +383,70 @@ duk_ret_t JSContext::duk_xml_http_request_send(duk_context *ctx) {
 	if (body_cstr) {
 		body = body_cstr;
 	}
+	// todo: proper exceptions
 	if (url == nullptr) {
+		std::cerr << "No url provided" << std::endl;
 		return DUK_RET_ERROR;
 	}
 	if (method_cstr == nullptr) {
+		std::cerr << "No method provided" << std::endl;
 		return DUK_RET_ERROR;
 	}
+
 	std::string_view method_str { method_cstr };
 	HttpMethod method = HttpMethod::GET;
 	if (method_str == std::string_view{"GET"}) {
 	} else if (method_str == std::string_view{"POST"}) {
 		method = HttpMethod::POST;
 	} else {
+		std::cerr << "Unknown method" << std::endl;
 		return DUK_RET_ERROR;
 	}
 
 	auto full_url = jsctx->m_tab.m_url->resolve(url);
 	if (!full_url) {
+		std::cerr << "Could not resolve URL" << std::endl;
 		return DUK_RET_ERROR;
 	}
 	if (full_url->origin() != jsctx->m_tab.m_url->origin()) {
 		// Same-Origin Policy
+		std::cerr << "Request violates Same-Origin Policy" << std::endl;
 		return DUK_RET_ERROR;
 	}
 
 	auto request = HttpRequest(*full_url, method, body);
 	if (!jsctx->m_tab.allowed_request(request.url, CSPSource::ScriptElem)) {
 		// Cross-origin XHR blocked by CSP.
+		std::cerr << "Request violates Cross-origin CSP" << std::endl;
 		return DUK_RET_ERROR;
 	}
 
-	// todo: all of these
-	auto out = jsctx->m_tab.m_browser.m_network_manager.block_for_request(request, jsctx->m_tab.m_url);
-	if (!out) {
-		return DUK_RET_ERROR;
+	if (!is_async) {
+		// todo: all of these
+		auto out = jsctx->m_tab.m_browser.m_network_manager.block_for_request(request, jsctx->m_tab.m_url);
+		if (!out) {
+			return DUK_RET_ERROR;
+		}
+		duk_push_string(ctx, out->body.c_str());
+		return 1;
+	} else {
+		auto task = std::make_unique<AfterXHRTask>(*jsctx, handle);
+		jsctx->m_tab.m_browser.m_network_manager.request_then_add_task(request, jsctx->m_tab.m_url, &jsctx->m_tab.m_task_runner, std::move(task));
+		return 0;
 	}
+}
 
-	duk_push_string(ctx, out->body.c_str());
-	return 1;
+void JSContext::dispatch_xhr_onload(HttpResponse response, int handle) {
+	if (m_discarded) return;
 
+	duk_get_global_string(m_interp, "__runXHROnload");
+	duk_push_lstring(m_interp, response.body.data(), response.body.length());
+	duk_push_int(m_interp, handle);
+	auto rc = duk_pcall(m_interp, 2);
+	if (rc != 0) {
+		std::cerr << "__runXHROnload crashed" << std::endl;
+	}
+	duk_pop(m_interp);
 }
 
 void JSContext::extend_xml_http_request(duk_context *ctx) {
@@ -434,14 +471,15 @@ struct SetTimeoutUserData {
 
 Uint32 JSContext::set_timeout_callback(void *userdata, SDL_TimerID timer_id, Uint32) {
 	SetTimeoutUserData *ud = (SetTimeoutUserData *)userdata;
-	ud->jsctx.m_tab.m_task_runner.schedule_js(ud->jsctx, std::nullopt, std::format("__runSetTimeout({})", ud->handle));
+	if (!ud->jsctx.m_discarded) {
+		ud->jsctx.m_tab.m_task_runner.schedule_js(ud->jsctx, std::nullopt, std::format("__runSetTimeout({})", ud->handle));
+	}
 	ud->jsctx.m_timers.erase(timer_id);
 	delete ud;
 	return 0;
 }
 
 duk_ret_t JSContext::duk_internal_set_timeout(duk_context *ctx) {
-
 	int handle = duk_get_int_default(ctx, -2, -1);
 	if (handle == -1) return DUK_RET_TYPE_ERROR;
 	int interval = duk_get_int_default(ctx, -1, -1);
@@ -498,6 +536,7 @@ JSContext::JSContext(Tab& tab)
 	assert(duk_peval_string_noresult(m_interp, f->c_str()) == 0 && "runtime.js runs");
 
 	extend_node(m_interp);
+	extend_xml_http_request(m_interp);
 	inject_console(m_interp);
 	inject_document(m_interp);
 	inject_internal(m_interp);
@@ -505,6 +544,8 @@ JSContext::JSContext(Tab& tab)
 
 JSContext::~JSContext() {
 	duk_destroy_heap(m_interp);
+	// todo: there is also a destroyed flag, for things like XHR now.
+	// This can probably be removed.
 	for (int tid : m_timers) {
 		// Opt for removing timers on destruction than a "destroyed" flag.
 		// This works better for C++.

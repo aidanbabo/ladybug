@@ -20,3 +20,10 @@ var inputs = document.querySelectorAll('input');
 for (var i = 0; i < inputs.length; i++) {
 	inputs[i].addEventListener('keydown', lengthCheck);
 }
+
+var xhr = new XMLHttpRequest();
+xhr.onload = function(_e) {
+	console.log('Got data', xhr.responseText);
+}
+xhr.open('GET', 'comment.js', true);
+xhr.send();

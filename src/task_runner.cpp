@@ -1,10 +1,4 @@
 #include "task_runner.hpp"
-#include <iostream>
-
-struct Task {
-	virtual void run() = 0;
-	virtual ~Task() = default;
-};
 
 struct JSTask : public Task {
 	JSContext& js;
@@ -25,6 +19,16 @@ struct JSTask : public Task {
 	~JSTask() override = default;
 };
 
+AfterXHRTask::AfterXHRTask(JSContext& jsctx, int handle)
+	: jsctx(jsctx)
+	, handle(handle)
+{}
+
+void AfterXHRTask::run() {
+	if (response)
+		jsctx.dispatch_xhr_onload(*response, handle);
+}
+
 TaskRunner::TaskRunner(Tab& tab)
 	: m_tab(tab)
 	, m_tasks()
@@ -32,18 +36,16 @@ TaskRunner::TaskRunner(Tab& tab)
 	, m_cond_var()
 {}
 
-void TaskRunner::schedule_js(JSContext& js, std::optional<URL> fetched_from, std::string body) {
-	// NO idea what's going on here. I do not know why we have a condvar at all.
-	// m_cond_var.wait /* for what? */
-	if (fetched_from) {
-		std::cerr << "Got " << *fetched_from << " for fetched_from" << std::endl;
-	} else {
-		std::cerr << "Got nullopt for fetched_from" << std::endl;
-	}
+void TaskRunner::schedule(std::unique_ptr<Task> task) {
 	m_mutex.lock();
-	m_tasks.push(std::make_unique<JSTask>(js, fetched_from, body));
+	m_tasks.push(std::move(task));
 	m_cond_var.notify_all();
 	m_mutex.unlock();
+}
+
+void TaskRunner::schedule_js(JSContext& js, std::optional<URL> fetched_from, std::string body) {
+	auto task = std::make_unique<JSTask>(js, fetched_from, body);
+	schedule(std::move(task));
 }
 
 void TaskRunner::run() {
@@ -55,15 +57,8 @@ void TaskRunner::run() {
 			m_tasks.pop();
 		}
 	}
-	if (task) {
+	if (task)
 		(*task)->run();
-		auto ff = dynamic_cast<JSTask*>(&**task)->fetched_from;
-		if (ff) {
-			std::cerr << "Gottttttt " << *ff << " for fetched_from" << std::endl;
-		} else {
-			std::cerr << "Gottttttt nullopt for fetched_from" << std::endl;
-		}
-	}
 
 	// ???
 	{
